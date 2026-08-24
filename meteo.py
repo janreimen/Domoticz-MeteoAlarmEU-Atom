@@ -2,6 +2,7 @@
 import re
 from datetime import datetime, timedelta
 from time import mktime
+from dateutil import parser as dateutil_parser
 
 # import sys
 # sys.path
@@ -12,6 +13,9 @@ from time import mktime
 # sys.path.append('C:\\Program Files (x86)\\Python37-32\\Lib\\site-packages')
 
 import feedparser
+import urllib.request
+import urllib.error
+import socket
 try:
     from bs4 import BeautifulSoup
 except Exception as e:
@@ -31,6 +35,9 @@ class Meteo:
     MAX_SHOWN_DETAIL_LENGTH = 80
     # show pub date of rss in name
     SHOW_DATE_IN_NAME = True
+    # timeout (seconds) for fetching the feed - previously unbounded,
+    # a hung connection would block the whole Domoticz heartbeat cycle
+    FEED_FETCH_TIMEOUT_SECONDS = 15
 
     AWT_TRANSLATION = {
         1: ["Wind", "Wind", "Wind"],
@@ -78,6 +85,7 @@ class Meteo:
 
         self.iconType = ''
         self.langKey = 0  # 0 = english, 1 = german, 2 = ?
+        self._lastRawData = None
         self.configure(domLangSetting, detailSetting, iconSetting)
         self.reset()
         return
@@ -92,7 +100,7 @@ class Meteo:
             str -- the name: like "Today: {location} ({update time from rss})"
         '''
         s = ''
-        if(self.hasError is True):
+        if (self.hasError is True) or (self.pubDate is None):
             s = getAwtTranslation(idx, self.langKey) + ': ERROR!!!'
         else:
             # convert from time struct to date
@@ -114,15 +122,6 @@ class Meteo:
 
     def getTomorrowTitle(self):
         return self.getDayTitle(201)
-
-    def needUpdate(self):
-        '''does some of the devices need an update
-
-        Returns:
-            boolean -- if True -> please update the device in domoticz
-        '''
-
-        return self.needUpdate
 
     def configure(self, domLangSetting, detailSetting, iconSetting):
         '''does the configuration of this service
@@ -246,18 +245,46 @@ class Meteo:
 
         """
 
+        self._lastRawData = None
+
         try:
 
             # verifyBS4()
 
             Domoticz.Debug('Retrieve meteo weather data from ' + self.rssUrl)
-            feed = feedparser.parse(self.rssUrl)
 
+            # fetch manually with an explicit timeout instead of letting
+            # feedparser.parse() do its own unbounded fetch - previously a
+            # hung/slow connection here would block the entire Domoticz
+            # heartbeat cycle indefinitely.
             try:
-                if(feed.status != 200):
-                    raise Exception("did not find feed for {}".format(self.rssUrl))
-            except AttributeError:
-                raise Exception("did not find feed for {}".format(self.rssUrl))
+                req = urllib.request.Request(
+                    self.rssUrl,
+                    headers={'User-Agent': 'Domoticz-MeteoAlarmEU-Atom/1.6.2'})
+                response = urllib.request.urlopen(
+                    req, timeout=Meteo.FEED_FETCH_TIMEOUT_SECONDS)
+                httpStatus = response.getcode()
+                self._lastRawData = response.read()
+            except socket.timeout:
+                raise Exception("timed out after {}s fetching feed"
+                                .format(Meteo.FEED_FETCH_TIMEOUT_SECONDS))
+            except urllib.error.HTTPError as e:
+                raise Exception("HTTP error {} fetching feed".format(e.code))
+            except urllib.error.URLError as e:
+                raise Exception("could not reach feed: {}"
+                                .format(getattr(e, 'reason', e)))
+
+            if httpStatus != 200:
+                raise Exception("did not find feed for {} (HTTP {})"
+                                .format(self.rssUrl, httpStatus))
+
+            feed = feedparser.parse(self._lastRawData)
+
+            # bozo=1 means feedparser had to work around a malformed feed -
+            # it still may have usable entries, but worth surfacing in debug
+            if getattr(feed, 'bozo', 0):
+                Domoticz.Debug("Feed parsed with warnings (bozo): {}"
+                               .format(getattr(feed, 'bozo_exception', 'unknown')))
 
             firstPubDate = None
             foundEntry = False
@@ -361,31 +388,7 @@ class Meteo:
                         baseDate = datetime.now()
                         relevantDate = baseDate + offset_day
 
-                        # #######################
-                        # TODO
-                        # nun beim ende das delta in +
-                        # oder beim start als - angeben
-                        # issue works on start up, but on update device causes errror (WINDOWS)
-                        #####################
-                        # startTime = datetime.strptime(start, '%d.%m.%Y %H:%M')
-                        # endTime = datetime.strptime(end, '%d.%m.%Y %H:%M')
-                        # startDelta = relevantDate.date() - startTime.date()
-                        # endDelta = endTime.date() - relevantDate.date()
-                        # Domoticz.Error("start: {} delta to now: {}".format(startTime, startDelta))
-                        # Domoticz.Error("end: {} delta to now: {}".format(endTime, endDelta))
-                        # if( startDelta.days > 0 ):
-                        #   start = "{:{tfmt}} (-{}d)".format(startTime , startDelta.days, tfmt='%H:%M')
-                        # else:
-                        #   start ='{:{tfmt}}'.format(startTime, tfmt='%H:%M')
-
-                        # if( endDelta.days > 0 ):
-                        #   end = "{:{tfmt}} (+{}d)".format(endTime , endDelta.days, tfmt='%H:%M')
-                        # else:
-                        #   end = '{:{tfmt}}'.format(endTime, tfmt='%H:%M')
-
                         # workaround...
-                        # matches = re.findall(
-                        # r'(\d{2}).(\d{2}).(\d{4}) (\d{2}:\d{2})', txt)
                         start = ""
                         end = ""
                         startFull = ""
@@ -416,7 +419,6 @@ class Meteo:
                                     src, startFull, endFull)
                         alarms[idx] = "{} {} {}({}) {}-{}".format(alarms[idx],
                                                                   warnImg, AWTtext, levels[idx], start, end)
-                        # data[idx]= "{} {} {}({}) {}-{}".format(data[idx],  warnImg,AWTtext, levels[idx], start,end)
                         data[idx] = "{}  {} {}({}) {}-{}  ".format(data[idx],
                                                                    warnImg, AWTtext, levels[idx], start, end)
 
@@ -439,28 +441,14 @@ class Meteo:
                     # only if details switched on generally or for icon
                     if(self.detailNo is False or 'detail' in self.iconType):
                         if self.detailLang in txt:
-                            # all languagres in one line eg: AT deutsch: bla english: bli
-                            # deutsch: Es treten oberhalb 1000 m Sturmböen mit
-                            # Geschwindigkeiten zwischen 60 km/h (17m/s, 33kn, Bft 7) und 70 km/h (20m/s, 38kn, Bft 8)
-                            # aus östlicher Richtung auf. In exponierten Lagen muss mit Sturmböen um 80 km/h
-                            # (22m/s, 44kn, Bft 9) gerechnet werden.
-                            # if( len(data[idx]) > 0 ) :
-                            #  data[idx] = data[idx] + "\r\n"
-
-                            # extract matching lang
-                            # matches = re.findall('(\benglish:|\bdeutsch:|\bsvenska:)(.*)', txt)
                             Domoticz.Debug(txt)
 
                             pattern = '({})(\([a-zA-Z-]*[\)])(:)(.*)'.format(self.detailLang)
-                            # foo = re.findall('(English)(\([a-zA-Z-]*[\)])(:)(.*)', txt)
                             result = re.findall(pattern, txt)
                             if(len(result) >= 1):
                                 detailTxt = result[0][3]
                                 Domoticz.Debug('BLZ found detail {} ({})'
                                                .format(detailTxt, self.detailLang))
-
-                            # for m in re.finditer('(english:|deutsch:|svenska:)(.*)', txt):
-                            #  Domoticz.Debug('fgffg {}'.format( m.group(2)))
 
                             ##
                             # take care about shown text
@@ -488,8 +476,6 @@ class Meteo:
                                 .format(self.detailLang))
                     else:
                         Domoticz.Debug("details switched OFF, so just Warning")
-                        # data[idx] =  "{} {}({}) ".
-                        # format(  data[idx],  AWTtext, levels[idx])
                         data[idx] = alarms[idx]
 
                 # after all lines ...
@@ -531,6 +517,11 @@ class Meteo:
 
         except (Exception) as e:
             Domoticz.Error("Error: " + str(e) + " URL: " + self.rssUrl)
+            if self._lastRawData is not None:
+                preview = self._lastRawData[:500]
+                Domoticz.Debug(
+                    "Raw feed response (first 500 bytes) for diagnosis: {}"
+                    .format(preview))
             self.setError(e)
             return
 
@@ -540,15 +531,6 @@ class Meteo:
 #############################################################################
 
 
-# def getMeteoLangFromSettings():
-#    lng = Settings["Language"]
-#    return getMeteoLang(lng)
-
-
-# takes the
-# PARAM :domLanguage
-# RETURN
-#
 def getMeteoLang(domLanguage):
     """translate the domoticz language from Settings["Language"] to meteo confrom.
     eg: Domoticz: de -> meteo: deutsch,
@@ -565,10 +547,10 @@ def getMeteoLang(domLanguage):
     if domLanguage in Meteo.DOM_LANG_TO_METEO:
         mLang = Meteo.DOM_LANG_TO_METEO[domLanguage]
     else:
-        Domoticz.Error("Given key '{}' "
-                       + "does not exist in Mapping "
-                       + "from Domoticz to Meteo! "
-                       .format(domLanguage))
+        Domoticz.Error(
+            "Given key '{}' does not exist in Mapping from Domoticz to Meteo! Falling back to English."
+            .format(domLanguage))
+        mLang = "English"
     return mLang
 
 
@@ -591,12 +573,6 @@ def getLangIndex(meteoLang):
     else:
         langKey = 0
     return langKey
-
-# takes the key from meteo and looks for defined translation
-# PARAM
-#  idx - based on the meteo rss awt, but its extended, so 99 works as well
-#  langIndex - the index stands for postion in langauge array
-#              0=english,1=deutsch,2=svenska
 
 
 def getAwtTranslation(idx, langIndex):
@@ -627,9 +603,8 @@ def getDatesFromLegacyRSS(txt, relevantDate):
     txt = txt.replace("From: ", "")
     txt = txt.replace("Until: ", "")
     dates = txt.split(" ")
-    from dateutil import parser
-    dat1 = parser.parse(dates[0])
-    dat2 = parser.parse(dates[1])
+    dat1 = dateutil_parser.parse(dates[0])
+    dat2 = dateutil_parser.parse(dates[1])
     start = getSDatesFromDate(dat1, relevantDate)
     end = getSDatesFromDate(dat2, relevantDate)
     result = [start[0], start[1], end[0], end[1]]
@@ -640,7 +615,10 @@ def getSDatesFromDate(date, relevantDate):
     '''extract the dates from a performed reg ex search
     and compare with relevant date to deliver a a customized shortDate
     If warning is relevant for the same day as relevant day, we return the time,
-    otherwise the date in form dd.mm.
+    otherwise the date in form dd.mm. plus time and day offset - previously
+    the time was dropped entirely when the day differed, losing the "clock
+    is not enough" info the TODO at the top of plugin.py calls out for
+    multi-day spans.
     Arguments:
         match {regex match} -- the matches from reg ex search.
                             matches = re.findall(r'(\d{2}).(\d{2}).(\d{4}) (\d{2}:\d{2})', txt)
@@ -652,11 +630,15 @@ def getSDatesFromDate(date, relevantDate):
     '''
     iDay = date.day
     longDate = "{}.{}. {:02d}:{:02d}".format(date.day, date.month, date.hour, date.minute)
+    dayDelta = (date.date() - relevantDate.date()).days
     # take care about start date
     if iDay == relevantDate.date().day:
         shortDate = "{:02d}:{:02d}".format(date.hour, date.minute)
+    elif dayDelta != 0:
+        shortDate = "{}.{}. {:02d}:{:02d} ({:+d}d)".format(
+            date.day, date.month, date.hour, date.minute, dayDelta)
     else:
-        shortDate = "{}.{}.".format(date.day, date.month)
+        shortDate = "{}.{}. {:02d}:{:02d}".format(date.day, date.month, date.hour, date.minute)
     result = [shortDate, longDate]
     return result
 
@@ -677,7 +659,6 @@ def getDatesFromRSS(txt, relevantDate):
     """
     start = ["", ""]
     end = ["", ""]
-    # matches = re.findall(r'(\d{4})-(\d{2})-(\d{4})(\d{2}:\d{2})', txt)
 
     matches = re.findall('(\d{4})[/.-](\d{2})[/.-](\d{2})', txt)
     if(matches):
@@ -710,21 +691,3 @@ def getDatesFromMatch(match, relevantDate):
         shortDate = "{}.{}.".format(iDay, match[1])
     result = [shortDate, longDate]
     return result
-
-
-# def verifyBS4():
-#     if(moduleLoaded('bs4') is False):
-#         try:
-#             from bs4 import BeautifulSoup
-#         except Exception as e:
-#             Domoticz.Error("Error import BeautifulSoup".format(e))
-
-
-# def moduleLoaded(modulename: str):
-#     import sys
-#     if modulename not in sys.modules:
-#         Domoticz.Error('{} not imported'.format(modulename))
-#         return False
-#     else:
-#         Domoticz.Debug('{}: {}'.format(modulename, sys.modules[modulename]))
-#         return True

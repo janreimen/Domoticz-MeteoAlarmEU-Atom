@@ -1,4 +1,4 @@
-n for displaying weather warnigs
+# plugin for displaying weather warnigs
 #
 # Author: belze
 #
