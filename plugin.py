@@ -1,4 +1,4 @@
-# plugin for displaying weather warnigs
+n for displaying weather warnigs
 #
 # Author: belze
 #
@@ -26,13 +26,17 @@ Version:    1.0.0: Initial Version
                    self.mt being None; fixed inverted error-backoff check;
                    fixed mktime(None) crash in getDayTitle when pubDate
                    is missing.
+            1.6.2: added Health device (Unit 3) and Last Update device
+                   (Unit 4); switched fixed 10-min error backoff to
+                   exponential backoff (10/20/40/80, capped at 120 min);
+                   added startup sanity check on the configured feed URL.
 
 """
 """
 
 
-<plugin key="MeteoAlarmEU-RSS-Atom" name="Meteo Alarm EU RSS Atom" author="belze,ycahome,janreimen" version="1.6.1" wikilink="" externallink="
-http://www.github.com/janreimen/Domoticz-MeteoAlarmEU-RSS-Atom.git">
+<plugin key="MeteoAlarmEU Atom" name="Meteo Alarm EU RSS Reader Atom" author="belze,ycahome,janreimen" version="1.6.2" wikilink="" externallink="
+http://www.domoticz.com/forum/viewtopic.php?f=65&t=19519">
      <description>
         <h2>Meteo Alarm EU RSS Reader eXtended</h2><br/>
         <h3>Features</h3>
@@ -131,6 +135,15 @@ except ImportError:
 # fallback polling interval (minutes) used if Mode3 is missing/invalid
 DEFAULT_POLL_MINUTES = 300
 
+# exponential backoff steps (minutes) applied after every 10th consecutive
+# error; index = (errorCounter // 10) - 1, clamped to the last entry
+BACKOFF_STEPS_MINUTES = [10, 20, 40, 80, 120]
+
+# used only for an early sanity-check warning in onStart(), not for
+# validation/rejection - a non-matching URL still gets used as configured
+EXPECTED_FEED_HOST = "feeds.meteoalarm.org"
+EXPECTED_FEED_PATH_HINT = "atom"
+
 
 class BasePlugin:
 
@@ -149,6 +162,7 @@ class BasePlugin:
         self.rss = None
         self.mt = None
         self.pollinterval = DEFAULT_POLL_MINUTES * 60
+        self.lastSuccessfulUpdate = None
         return
 
     def onStart(self):
@@ -186,6 +200,18 @@ class BasePlugin:
         self.rssUrl = Parameters["Mode1"]
         self.rssCode = Parameters["Mode2"]
 
+        # sanity-check the feed URL early - doesn't block startup, just
+        # surfaces a clear warning immediately instead of an obscure parse
+        # error on the first heartbeat (e.g. if it's still set to an old
+        # legacy-rss URL after the RSS->Atom migration)
+        if EXPECTED_FEED_HOST not in self.rssUrl:
+            Domoticz.Error("Configured RSSFeed URL '{}' does not look like a {} URL - check Mode1 in hardware settings"
+                            .format(self.rssUrl, EXPECTED_FEED_HOST))
+        elif EXPECTED_FEED_PATH_HINT not in self.rssUrl.lower():
+            Domoticz.Error("Configured RSSFeed URL '{}' does not look like an Atom feed - "
+                            "legacy RSS feeds were sunset; use a '...legacy-atom-<region>' URL"
+                            .format(self.rssUrl))
+
         # (fixed: wrap Meteo() construction so any failure inside it -
         # e.g. an unmapped Domoticz language code - is caught, logged
         # clearly, and self.mt stays explicitly None instead of leaving
@@ -208,6 +234,8 @@ class BasePlugin:
         # init with empty data
         updateDevice(1, 0, "No Data")
         updateDevice(2, 0, "No Data")
+        updateDevice(3, 0, "OK", alwaysUpdate=True)
+        updateDevice(4, 0, "never", alwaysUpdate=True)
 
     def onStop(self):
         Domoticz.Debug("onStop called")
@@ -238,18 +266,25 @@ class BasePlugin:
                 txt = self.mt.errorMsg
                 updateDevice(1, 4, txt, self.mt.getTodayTitle())
                 updateDevice(2, 4, txt, self.mt.getTomorrowTitle())
-                # (fixed: was `if(self.errorCounter % 10):` which is truthy
-                # for every count EXCEPT exact multiples of 10 - i.e. it
-                # backed off on almost every error instead of only every
+                updateDevice(3, 1, "ERROR #{}: {}".format(self.errorCounter, txt))
+                # (fixed in 1.6.1: was `if(self.errorCounter % 10):` which is
+                # truthy for every count EXCEPT exact multiples of 10 - i.e.
+                # it backed off on almost every error instead of only every
                 # 10th one. Correct check needs `== 0`.)
                 if(self.errorCounter % 10 == 0):
                     self.mt.reset()
-                    Domoticz.Error("got {} times an error, wait 10 min before try again".format(self.errorCounter))
-                    self.nextpoll = now + timedelta(minutes=10)
+                    backoffIndex = min((self.errorCounter // 10) - 1, len(BACKOFF_STEPS_MINUTES) - 1)
+                    backoffMinutes = BACKOFF_STEPS_MINUTES[backoffIndex]
+                    Domoticz.Error("got {} times an error, wait {} min before try again"
+                                    .format(self.errorCounter, backoffMinutes))
+                    self.nextpoll = now + timedelta(minutes=backoffMinutes)
             else:
                 # no error, reset counter
                 self.errorCounter = 0
+                self.lastSuccessfulUpdate = now
                 self.nextpoll = now + timedelta(seconds=self.pollinterval)
+                updateDevice(3, 0, "OK")
+                updateDevice(4, 0, "{:%Y-%m-%d %H:%M:%S}".format(self.lastSuccessfulUpdate), alwaysUpdate=True)
                 if self.mt.needUpdate is True:
                     updateDevice(1, self.mt.todayLevel, self.mt.todayDetail, self.mt.getTodayTitle())
                     updateDevice(2, self.mt.tomorrowLevel, self.mt.tomorrowDetail, self.mt.getTomorrowTitle())
@@ -346,6 +381,16 @@ def createDevices():
     if 2 not in Devices:
         Domoticz.Device(Name="Tomorrow", Unit=2, TypeName="Alert", Used=1).Create()
         Domoticz.Log("Devices[2] created.")
+    # new in 1.6.2: health status device - lets you build a Domoticz
+    # notification/automation off plugin health without parsing alert text
+    if 3 not in Devices:
+        Domoticz.Device(Name="Plugin Status", Unit=3, TypeName="Alert", Used=1).Create()
+        Domoticz.Log("Devices[3] (Plugin Status) created.")
+    # new in 1.6.2: last successful update timestamp - makes a silently
+    # stuck feed visible in the Domoticz UI instead of only in logs
+    if 4 not in Devices:
+        Domoticz.Device(Name="Last Successful Update", Unit=4, TypeName="Text", Used=1).Create()
+        Domoticz.Log("Devices[4] (Last Successful Update) created.")
 
 
 #
