@@ -30,12 +30,24 @@ Version:    1.0.0: Initial Version
                    (Unit 4); switched fixed 10-min error backoff to
                    exponential backoff (10/20/40/80, capped at 120 min);
                    added startup sanity check on the configured feed URL.
+            1.6.3: meteo.py rewritten - the live feed no longer embeds an
+                   HTML table/icons/per-language text (verified by
+                   fetching it directly); parsing now reads the real CAP
+                   fields (cap:event, cap:severity, cap:onset, cap:expires)
+                   directly. Multi-day spans now split correctly across
+                   Today/Tomorrow using real timestamps. Fixed a
+                   pre-existing bug where German/Swedish detail-language
+                   selection silently fell back to English; added
+                   French/Spanish/Finnish translations. Dropped the bs4
+                   and python-dateutil dependencies (no longer needed).
+                   plugin.py itself is unchanged - Meteo's public
+                   interface stayed the same.
 
 """
 """
 
 
-<plugin key="MeteoAlarmEU Atom" name="Meteo Alarm EU RSS Reader Atom" author="belze,ycahome,janreimen" version="1.6.2" wikilink="" externallink="
+<plugin key="MeteoAlarmEU Atom" name="Meteo Alarm EU RSS Reader Atom" author="belze,ycahome,janreimen" version="1.6.3" wikilink="" externallink="
 http://www.domoticz.com/forum/viewtopic.php?f=65&t=19519">
      <description>
         <h2>Meteo Alarm EU RSS Reader eXtended</h2><br/>
