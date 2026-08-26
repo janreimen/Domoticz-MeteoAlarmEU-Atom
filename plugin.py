@@ -1,11 +1,11 @@
 # plugin for displaying weather warnigs
 #
-# Author: belze
+# Author: janreimen, belze
 #
 """
 MeteoAlarmEU RSS Reader Plugin
 
-Author: Belze(2018/2019/2020/2022), Ycahome(2017), JanReimen(2026)
+Author: JanReimen(2026), Belze(2018-2022), Ycahome(2017)
 
 
 Version:    1.0.0: Initial Version
@@ -19,7 +19,7 @@ Version:    1.0.0: Initial Version
             1.4.1: cleaned up a bit and added comments on functions
             1.4.2: bit more stability and better handling for wrong feed url
             1.5.0: new way to get rss feed
-            1.6.0: switched over from RSS to ATOM Feeds
+            1.6.0: switched over from RSS to ATOM Feeds - janreimen branch
             1.6.1: fixed onStart/onHeartbeat crash when self.mt never got
                    initialized (UnboundLocalError in getMeteoLang, missing
                    pollinterval fallback); guarded onHeartbeat against
@@ -40,32 +40,50 @@ Version:    1.0.0: Initial Version
                    selection silently fell back to English; added
                    French/Spanish/Finnish translations. Dropped the bs4
                    and python-dateutil dependencies (no longer needed).
-                   plugin.py itself is unchanged - Meteo's public
-                   interface stayed the same.
+            1.7.0: fixed DOM_LANG_TO_METEO['se'] -> 'sv' (Domoticz's real
+                   Swedish code - 'se' never matched anything). Added
+                   cap:status filtering (Test/Exercise/Draft/System
+                   entries are now skipped - only Actual alerts show).
+                   needUpdate is now a real before/after content
+                   fingerprint instead of a pubDate-based proxy.
+                   cap:urgency is now shown for not-yet-active/ending
+                   warnings ([upcoming]/[ending]). Added multi-region
+                   support: the "Address" field (previously unused by
+                   this plugin) now accepts additional comma-separated
+                   region codes, each getting its own Today/Tomorrow
+                   device pair, sharing a single feed fetch per
+                   heartbeat rather than fetching once per region.
+                   Added a bundled severity+type icon set (meteoalarm's
+                   own 4-colour scale x 12 warning categories) loaded
+                   from meteoalarm_icons.zip, replacing the feed-sourced
+                   icons that no longer exist - NOTE: this specific piece
+                   is built against documented conventions but has not
+                   been verified against a live Domoticz instance; if
+                   icons don't appear, the plugin still works normally,
+                   it just falls back to the default Alert icon.
 
 """
 """
 
 
-<plugin key="MeteoAlarmEU Atom" name="Meteo Alarm EU RSS Reader Atom" author="belze,ycahome,janreimen" version="1.6.3" wikilink="" externallink="
+<plugin key="MeteoAlarmEU-Atom" name="Meteo Alarm EU RSS Reader Atom" author="belze,ycahome,janreimen" version="1.7.0" wikilink="" externallink="
 http://www.domoticz.com/forum/viewtopic.php?f=65&t=19519">
      <description>
         <h2>Meteo Alarm EU RSS Reader eXtended</h2><br/>
         <h3>Features</h3>
         <ul style="list-style-type:square">
-            <li>shows warnings for today and tomorrow</li>
+            <li>shows warnings for today and tomorrow, for one or more regions</li>
             <li>using domoticz alarm level to signal the risk</li>
             <li>detail level can be chosen</li>
-            <li>supports english, german, partly swedish</li>
-            <li>use this langauge to grab matching warning from meteo</li>
-            <li>icons from meteo can be embedded</li>
+            <li>supports english, german, swedish, french, spanish, finnish</li>
             <li>meteo publish date is shown in name</li>
             <li>if problems occur eg. missing libs - devices will show it</li>
         </ul>
         <h3>Devices</h3>
         <ul style="list-style-type:square">
-            <li>today - warnings for current day</li>
-            <li>tomorrow - warnings for the next day</li>
+            <li>today / tomorrow - warnings for the primary region</li>
+            <li>Plugin Status / Last Successful Update - feed fetch health</li>
+            <li>additional Today/Tomorrow pairs, one per extra region configured</li>
         </ul>
         <h3>Hint</h3>
         First visit -><a href="https://feeds.meteoalarm.org/">
@@ -75,7 +93,8 @@ http://www.domoticz.com/forum/viewtopic.php?f=65&t=19519">
     <params>
         <param field="Mode1" label="RSSFeed" width="400px" required="true" default="https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-atom-lux
 embourg"/>
-        <param field="Mode2" label="RSSCode" width="400px" required="true" default="202"/>
+        <param field="Mode2" label="RSSCode (primary region)" width="400px" required="true" default="202"/>
+        <param field="Address" label="Additional Region Codes (comma-separated, optional)" width="400px" required="false" default=""/>
         <param field="Mode3" label="Update every x minutes" width="200px" required="true" default="300"/>
         <param field="Mode4" label="Debug" width="75px">
             <options>
@@ -96,7 +115,8 @@ embourg"/>
                 <option label="Details in Finnish" value="Finnish"   />
             </options>
         </param>
-        <param field="Mode6" label="Show Alarm Icons from RSS" width="200px">
+        <param field="Mode6" label="Show Alarm Icons" width="200px"
+        title="as of 1.7.0 this controls the plugin's own bundled severity+type icon set, since the feed itself no longer provides icons">
             <options>
                 <option label="NO_ICON" value="icon_no"  selected="selected"/>
                 <option label="inline icon" value="icon_inline"   />
@@ -110,28 +130,22 @@ embourg"/>
 import datetime as dt
 import json
 import re
-import urllib.error
-import urllib.request
+import os
 from datetime import datetime, timedelta
 from math import asin, cos, radians, sin, sqrt
 from os import path
 
 
+import meteo
 from meteo import Meteo
 
 # TODO
-# - deeper look on from-until, sometimes until goes for a few days... in this case clock is not enough
 # - langauge
-#  - use langauge from dom Settings["Language"] - en,de,..
-#  - if defined lang not found in rss -> english as fallback?
-#  - clean up
-# - more languages ..
-# - icons as set?,
-#  - 48png
-#  - alarmtype must be integrated into alarm level, default is 0-4, eg: Alert48_22.png
-#  - see www/app/UtilityController.js: img='<img src="images/Alert48_' + item.Level + '.png" height="48" width="48">';
-#  - https://www.meteoalarm.eu/documents/rss/wflag-l4-t10.jpg
-#  - https://www.meteoalarm.eu/theme/common/pictures/aw104.jpg
+#  - use langauge from dom Settings["Language"] - en,de,..  (done - see 1.6.1/1.6.3)
+#  - if defined lang not found in rss -> english as fallback? (done - see 1.6.1)
+# - icon filenames/packaging format used by meteoalarm_icons.zip is built
+#   against documented Domoticz plugin-icon conventions but is UNVERIFIED
+#   against a live Domoticz instance - test and adjust if icons don't load
 
 
 try:
@@ -156,6 +170,12 @@ BACKOFF_STEPS_MINUTES = [10, 20, 40, 80, 120]
 EXPECTED_FEED_HOST = "feeds.meteoalarm.org"
 EXPECTED_FEED_PATH_HINT = "atom"
 
+# filename of the bundled custom icon zip, expected alongside plugin.py
+ICON_ZIP_FILENAME = "meteoalarm_icons.zip"
+# one representative image name used to check whether icons are already
+# loaded, to avoid recreating them on every onStart()
+ICON_PROBE_NAME = "MeteoAlarmEUAtomWindL1"
+
 
 class BasePlugin:
 
@@ -164,17 +184,12 @@ class BasePlugin:
         self.error = False
         self.errorCounter = 0
         self.nextpoll = datetime.now()
-        self.detailNo = True
-        self.detailLang = "english"
-        self.iconNo = True
 
-        self.iconType = ''
-        self.langKey = 0  # 0 = english, 1 = german, 2 = ?
-
-        self.rss = None
-        self.mt = None
+        self.meteoList = []  # list of Meteo instances, one per configured region
+        self.rssUrl = None
         self.pollinterval = DEFAULT_POLL_MINUTES * 60
         self.lastSuccessfulUpdate = None
+        self.iconsLoaded = False
         return
 
     def onStart(self):
@@ -188,11 +203,10 @@ class BasePlugin:
         Domoticz.Debug("onStart called")
 
         # check polling interval parameter
-        # (fixed: previously, if int() raised, self.pollinterval was never
-        # assigned since it only happened inside the try's `else` clause -
-        # the very next Domoticz.Log() line would then throw
-        # AttributeError: 'BasePlugin' object has no attribute 'pollinterval',
-        # aborting onStart() before self.mt ever got created.)
+        # (fixed in 1.6.1: previously, if int() raised, self.pollinterval was
+        # never assigned since it only happened inside the try's `else`
+        # clause - the very next Domoticz.Log() line would then throw
+        # AttributeError, aborting onStart() before anything got initialized.)
         try:
             temp = int(Parameters["Mode3"])
         except (ValueError, TypeError):
@@ -201,21 +215,20 @@ class BasePlugin:
                             .format(Parameters.get("Mode3"), temp))
 
         if temp < 5:
-            temp = 5  # minimum polling interval
+            temp = 5
             Domoticz.Error("Specified polling interval too short: changed to 5 minutes")
         elif temp > 1440:
-            temp = 1440  # maximum polling interval is 1 day
+            temp = 1440
             Domoticz.Error("Specified polling interval too long: changed to 1440 minutes (1 day)")
         self.pollinterval = temp * 60
         Domoticz.Log("Using polling interval of {} seconds".format(str(self.pollinterval)))
 
         self.rssUrl = Parameters["Mode1"]
-        self.rssCode = Parameters["Mode2"]
+        primaryCode = Parameters["Mode2"]
 
         # sanity-check the feed URL early - doesn't block startup, just
         # surfaces a clear warning immediately instead of an obscure parse
-        # error on the first heartbeat (e.g. if it's still set to an old
-        # legacy-rss URL after the RSS->Atom migration)
+        # error on the first heartbeat
         if EXPECTED_FEED_HOST not in self.rssUrl:
             Domoticz.Error("Configured RSSFeed URL '{}' does not look like a {} URL - check Mode1 in hardware settings"
                             .format(self.rssUrl, EXPECTED_FEED_HOST))
@@ -224,30 +237,62 @@ class BasePlugin:
                             "legacy RSS feeds were sunset; use a '...legacy-atom-<region>' URL"
                             .format(self.rssUrl))
 
-        # (fixed: wrap Meteo() construction so any failure inside it -
-        # e.g. an unmapped Domoticz language code - is caught, logged
-        # clearly, and self.mt stays explicitly None instead of leaving
-        # the attribute entirely unset.)
-        self.mt = None
-        try:
-            self.mt = Meteo(self.rssUrl, rssCode=self.rssCode,
-                            domLangSetting=Settings["Language"], detailSetting=Parameters["Mode5"],
-                            iconSetting=Parameters["Mode6"], locationName=Parameters["Name"])
-        except Exception as e:
-            Domoticz.Error("Failed to initialize Meteo instance: {}".format(e))
+        # (new in 1.7.0) additional region codes, comma-separated, sharing
+        # the same feed URL - the primary Mode2 code is always index 0 and
+        # keeps the original Unit 1/2 devices for backward compatibility
+        additionalCodes = [c.strip() for c in Parameters.get("Address", "").split(",") if c.strip()]
+        allCodes = [primaryCode] + additionalCodes
+        if additionalCodes:
+            Domoticz.Log("Monitoring {} regions: {}".format(len(allCodes), ", ".join(allCodes)))
+
+        self.meteoList = []
+        for code in allCodes:
+            try:
+                mt = Meteo(self.rssUrl, rssCode=code,
+                          domLangSetting=Settings["Language"], detailSetting=Parameters["Mode5"],
+                          iconSetting=Parameters["Mode6"], locationName=Parameters["Name"])
+                self.meteoList.append(mt)
+            except Exception as e:
+                Domoticz.Error("Failed to initialize Meteo instance for region '{}': {}".format(code, e))
+
+        if not self.meteoList:
+            Domoticz.Error("No Meteo instances could be initialized - plugin will not function until fixed")
             return
 
         if self.debug is True:
-            self.mt.dumpMeteoConfig()  # (fixed: was missing () - never actually called)
+            self.meteoList[0].dumpMeteoConfig()
 
-        # Check if devices need to be created
-        createDevices()
+        # (new in 1.7.0) load the bundled severity+type icon set. This is
+        # never allowed to prevent the plugin from working - any failure
+        # here just means devices fall back to the default Alert icon.
+        self._loadIcons()
+
+        createDevices(len(self.meteoList))
 
         # init with empty data
-        updateDevice(1, 0, "No Data")
-        updateDevice(2, 0, "No Data")
+        for i in range(len(self.meteoList)):
+            todayUnit, tomorrowUnit = unitsForRegion(i)
+            updateDevice(todayUnit, 0, "No Data")
+            updateDevice(tomorrowUnit, 0, "No Data")
         updateDevice(3, 0, "OK", alwaysUpdate=True)
         updateDevice(4, 0, "never", alwaysUpdate=True)
+
+    def _loadIcons(self):
+        try:
+            zipPath = os.path.join(Parameters.get("HomeFolder", ""), ICON_ZIP_FILENAME)
+            if not os.path.exists(zipPath):
+                Domoticz.Debug("Icon zip not found at {} - devices will use the default Alert icon."
+                               .format(zipPath))
+                self.iconsLoaded = False
+                return
+            if ICON_PROBE_NAME not in Images:
+                Domoticz.Image(Filename=ICON_ZIP_FILENAME).Create()
+                Domoticz.Log("Custom severity/type icon set loaded from {}.".format(ICON_ZIP_FILENAME))
+            self.iconsLoaded = True
+        except Exception as e:
+            Domoticz.Error("Could not load custom icons ({}) - devices will use the default Alert icon."
+                            .format(e))
+            self.iconsLoaded = False
 
     def onStop(self):
         Domoticz.Debug("onStop called")
@@ -258,49 +303,72 @@ class BasePlugin:
             "onCommand called for Unit " + str(Unit) + ": Parameter '" + str(Command) + "', Level: " + str(Level))
 
     def onHeartbeat(self):
-        # (fixed: guard against onStart having failed before self.mt was
-        # set - previously this crashed with
-        # AttributeError: 'BasePlugin' object has no attribute 'mt'
-        # on every single heartbeat once onStart failed early.)
-        if self.mt is None:
-            Domoticz.Error("Plugin not initialized (self.mt is None) - check onStart errors above, skipping heartbeat")
+        # (fixed in 1.6.1, extended in 1.7.0 for multi-region: guard against
+        # onStart having failed before any Meteo instance was created.)
+        if not self.meteoList:
+            Domoticz.Error("Plugin not initialized (no Meteo instances) - check onStart errors above, skipping heartbeat")
             return
 
         now = datetime.now()
-        if now >= self.nextpoll:
+        if now < self.nextpoll:
+            return
 
-            self.mt.readMeteoWarning()
-            # check if error
-            if(self.mt.hasError is True):
-                Domoticz.Error("Error #{} on reading feed ".format(self.errorCounter))
-                self.errorCounter += 1
-                self.nextpoll = now
-                txt = self.mt.errorMsg
-                updateDevice(1, 4, txt, self.mt.getTodayTitle())
-                updateDevice(2, 4, txt, self.mt.getTomorrowTitle())
-                updateDevice(3, 1, "ERROR #{}: {}".format(self.errorCounter, txt))
-                # (fixed in 1.6.1: was `if(self.errorCounter % 10):` which is
-                # truthy for every count EXCEPT exact multiples of 10 - i.e.
-                # it backed off on almost every error instead of only every
-                # 10th one. Correct check needs `== 0`.)
-                if(self.errorCounter % 10 == 0):
-                    self.mt.reset()
-                    backoffIndex = min((self.errorCounter // 10) - 1, len(BACKOFF_STEPS_MINUTES) - 1)
-                    backoffMinutes = BACKOFF_STEPS_MINUTES[backoffIndex]
-                    Domoticz.Error("got {} times an error, wait {} min before try again"
-                                    .format(self.errorCounter, backoffMinutes))
-                    self.nextpoll = now + timedelta(minutes=backoffMinutes)
-            else:
-                # no error, reset counter
-                self.errorCounter = 0
-                self.lastSuccessfulUpdate = now
-                self.nextpoll = now + timedelta(seconds=self.pollinterval)
-                updateDevice(3, 0, "OK")
-                updateDevice(4, 0, "{:%Y-%m-%d %H:%M:%S}".format(self.lastSuccessfulUpdate), alwaysUpdate=True)
-                if self.mt.needUpdate is True:
-                    updateDevice(1, self.mt.todayLevel, self.mt.todayDetail, self.mt.getTodayTitle())
-                    updateDevice(2, self.mt.tomorrowLevel, self.mt.tomorrowDetail, self.mt.getTomorrowTitle())
+        # (new in 1.7.0) fetch the feed ONCE per heartbeat and share it
+        # across all configured regions, instead of each region doing its
+        # own redundant HTTP fetch of what is the same feed content.
+        try:
+            feed, rawData = meteo.fetchFeed(self.rssUrl, Meteo.FEED_FETCH_TIMEOUT_SECONDS)
+        except Exception as e:
+            Domoticz.Error("Error #{} on reading feed: {}".format(self.errorCounter, e))
+            self.errorCounter += 1
+            self.nextpoll = now
+            errTxt = str(e)
+            for i, mt in enumerate(self.meteoList):
+                mt.setError(errTxt)
+                todayUnit, tomorrowUnit = unitsForRegion(i)
+                updateDevice(todayUnit, 4, errTxt, mt.getTodayTitle())
+                updateDevice(tomorrowUnit, 4, errTxt, mt.getTomorrowTitle())
+            updateDevice(3, 1, "ERROR #{}: {}".format(self.errorCounter, errTxt))
+            # (fixed in 1.6.1: was `if(self.errorCounter % 10):` which is
+            # truthy for every count EXCEPT exact multiples of 10 - i.e. it
+            # backed off on almost every error instead of only every 10th
+            # one. Correct check needs `== 0`.)
+            if self.errorCounter % 10 == 0:
+                for mt in self.meteoList:
+                    mt.reset()
+                backoffIndex = min((self.errorCounter // 10) - 1, len(BACKOFF_STEPS_MINUTES) - 1)
+                backoffMinutes = BACKOFF_STEPS_MINUTES[backoffIndex]
+                Domoticz.Error("got {} times an error, wait {} min before try again"
+                                .format(self.errorCounter, backoffMinutes))
+                self.nextpoll = now + timedelta(minutes=backoffMinutes)
             Domoticz.Debug("----------------------------------------------------")
+            return
+
+        # fetch succeeded - process each region against the shared feed
+        self.errorCounter = 0
+        self.lastSuccessfulUpdate = now
+        self.nextpoll = now + timedelta(seconds=self.pollinterval)
+        updateDevice(3, 0, "OK")
+        updateDevice(4, 0, "{:%Y-%m-%d %H:%M:%S}".format(self.lastSuccessfulUpdate), alwaysUpdate=True)
+
+        for i, mt in enumerate(self.meteoList):
+            todayUnit, tomorrowUnit = unitsForRegion(i)
+            try:
+                mt.processFetchedFeed(feed)
+            except Exception as e:
+                Domoticz.Error("Error processing region '{}': {}".format(mt.rssCode, e))
+                mt.setError(e)
+
+            if mt.hasError:
+                updateDevice(todayUnit, 4, str(mt.errorMsg), mt.getTodayTitle())
+                updateDevice(tomorrowUnit, 4, str(mt.errorMsg), mt.getTomorrowTitle())
+            elif mt.needUpdate is True:
+                todayImage = mt.getDayIconKey(0) if self.iconsLoaded else None
+                tomorrowImage = mt.getDayIconKey(1) if self.iconsLoaded else None
+                updateDevice(todayUnit, mt.todayLevel, mt.todayDetail, mt.getTodayTitle(), imageName=todayImage)
+                updateDevice(tomorrowUnit, mt.tomorrowLevel, mt.tomorrowDetail, mt.getTomorrowTitle(), imageName=tomorrowImage)
+
+        Domoticz.Debug("----------------------------------------------------")
 
 
 global _plugin
@@ -331,7 +399,23 @@ def onHeartbeat():
 #############################################################################
 
 
-# Generic helper functions
+def unitsForRegion(index):
+    '''maps a region's index in self.meteoList to its (today, tomorrow)
+    Domoticz Unit numbers. Index 0 (the primary/Mode2 region) always uses
+    Units 1/2, unchanged since before multi-region support, so existing
+    installs upgrading to 1.7.0 keep their existing device IDs. Units 3/4
+    are reserved for the shared Plugin Status / Last Successful Update
+    devices. Additional regions start at Unit 5, two Units each.
+
+    Arguments:
+        index {int} -- position in self.meteoList
+
+    Returns:
+        (int, int) -- (todayUnit, tomorrowUnit)
+    '''
+    if index == 0:
+        return 1, 2
+    return 5 + (index - 1) * 2, 6 + (index - 1) * 2
 
 
 def DumpConfigToLog():
@@ -352,24 +436,15 @@ def DumpConfigToLog():
 
 
 def parseIntValue(s):
-    """Parse an int and return None if no int is given
-     Arguments:
-        s {str} -- string of int value
-    Returns:
-        int -- the value in int or None
-    """
+    """Parse an int and return None if no int is given"""
     try:
         return int(s)
     except:
         return None
 
-#
-# Parse a float and return None if no float is given
-#
-
 
 def parseFloatValue(s):
-
+    """Parse a float and return None if no float is given"""
     try:
         return float(s)
     except:
@@ -381,53 +456,68 @@ def parseFloatValue(s):
 #############################################################################
 
 
-def createDevices():
-    '''
-    this creates the device for today and tomorrow, if they are not in device-list
-    '''
+def createDevices(regionCount):
+    '''creates the Today/Tomorrow device pair for each configured region,
+    plus the shared Plugin Status / Last Successful Update devices, if
+    they don't already exist.
 
-    # create the mandatory child devices if not yet exist
+    Arguments:
+        regionCount {int} -- number of configured regions (>= 1)
+    '''
     if 1 not in Devices:
         Domoticz.Device(Name="Today", Unit=1, TypeName="Alert", Used=1).Create()
         Domoticz.Log("Devices[1] created.")
     if 2 not in Devices:
         Domoticz.Device(Name="Tomorrow", Unit=2, TypeName="Alert", Used=1).Create()
         Domoticz.Log("Devices[2] created.")
-    # new in 1.6.2: health status device - lets you build a Domoticz
-    # notification/automation off plugin health without parsing alert text
     if 3 not in Devices:
         Domoticz.Device(Name="Plugin Status", Unit=3, TypeName="Alert", Used=1).Create()
         Domoticz.Log("Devices[3] (Plugin Status) created.")
-    # new in 1.6.2: last successful update timestamp - makes a silently
-    # stuck feed visible in the Domoticz UI instead of only in logs
     if 4 not in Devices:
         Domoticz.Device(Name="Last Successful Update", Unit=4, TypeName="Text", Used=1).Create()
         Domoticz.Log("Devices[4] (Last Successful Update) created.")
 
+    # (new in 1.7.0) additional regions get their own numbered device pairs
+    for i in range(1, regionCount):
+        todayUnit, tomorrowUnit = unitsForRegion(i)
+        code = _plugin.meteoList[i].rssCode if i < len(_plugin.meteoList) else "region {}".format(i + 1)
+        if todayUnit not in Devices:
+            Domoticz.Device(Name="Today ({})".format(code), Unit=todayUnit, TypeName="Alert", Used=1).Create()
+            Domoticz.Log("Devices[{}] (Today, {}) created.".format(todayUnit, code))
+        if tomorrowUnit not in Devices:
+            Domoticz.Device(Name="Tomorrow ({})".format(code), Unit=tomorrowUnit, TypeName="Alert", Used=1).Create()
+            Domoticz.Log("Devices[{}] (Tomorrow, {}) created.".format(tomorrowUnit, code))
 
-#
-def updateDevice(Unit, highestLevel, alarmData, name='', alwaysUpdate=False):
-    '''update a device - means today or tomorrow, with given data.
-    If there are changes and the device exists.
+
+def updateDevice(Unit, highestLevel, alarmData, name='', alwaysUpdate=False, imageName=None):
+    '''update a device - means today or tomorrow (or status/last-update),
+    with given data. If there are changes and the device exists.
+
     Arguments:
-        Unit {int} -- index of device, 1 = today, 2 = tomorrow
-        highestLevel {[type]} -- the maximum warning level for that day, it is used to set the domoticz alarm level
-        alarmData {[str]} -- data to show in that device, aka text
+        Unit {int} -- Domoticz Unit number
+        highestLevel {int} -- the maximum warning level for that day
+        alarmData {str} -- data to show in that device, aka text
 
     Optional Arguments:
-        name {str} -- optional: to set the name of that device, eg. mor info about  (default: {''})
-        alwaysUpdate {bool} -- optional: to ignore current status/needs update (default: {False})
+        name {str} -- optional: to set the device's display name
+        alwaysUpdate {bool} -- optional: ignore current status/needs update
+        imageName {str} -- optional (new in 1.7.0): custom icon name from
+                            Images, e.g. "MeteoAlarmEUAtomThunderstormL3".
+                            Ignored if not found in Images - never an error.
     '''
-
-    # Make sure that the Domoticz device still exists (they can be deleted) before updating it
-    if Unit in Devices:
-        if (alarmData != Devices[Unit].sValue) or (int(highestLevel) != Devices[Unit].nValue or alwaysUpdate is True):
-            if(len(name) <= 0):
-                Devices[Unit].Update(int(highestLevel), str(alarmData))
-            else:
-                Devices[Unit].Update(int(highestLevel), str(alarmData), Name=name)
-            Domoticz.Log("BLZ: Awareness Updated to: {} value: {}".format(alarmData, highestLevel))
-        else:
-            Domoticz.Log("BLZ: Awareness Remains Unchanged")
-    else:
+    if Unit not in Devices:
         Domoticz.Error("Devices[{}] is unknown. So we cannot update it.".format(Unit))
+        return
+
+    kwargs = {}
+    if imageName and imageName in Images:
+        kwargs['Image'] = Images[imageName].ID
+
+    if (alarmData != Devices[Unit].sValue) or (int(highestLevel) != Devices[Unit].nValue) or alwaysUpdate is True:
+        if len(name) <= 0:
+            Devices[Unit].Update(int(highestLevel), str(alarmData), **kwargs)
+        else:
+            Devices[Unit].Update(int(highestLevel), str(alarmData), Name=name, **kwargs)
+        Domoticz.Log("BLZ: Awareness Updated to: {} value: {}".format(alarmData, highestLevel))
+    else:
+        Domoticz.Log("BLZ: Awareness Remains Unchanged")

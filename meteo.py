@@ -1,26 +1,24 @@
 # moved logic of Meteo rss warning to extra class
 #
-# 1.6.3 note: the live meteoalarm.org Atom feed no longer embeds an HTML
-# table with per-language text blocks and icon <img> tags inside each
-# entry's <description> (the format this file originally parsed). It now
-# publishes structured CAP fields directly (cap:event, cap:severity,
-# cap:onset, cap:expires, etc.) with no per-entry icon and no embedded
-# multi-language text. This file was rewritten against the real current
-# feed structure (verified by fetching and inspecting it directly) rather
-# than the old HTML-scraping approach, which would throw on every matching
-# entry against live data (KeyError on the now-nonexistent 'description'
-# field).
+# 1.6.3: rewritten to parse the real CAP-Atom feed fields directly
+# (cap:event, cap:severity, cap:onset, cap:expires) instead of the old
+# HTML-table/icon scraping the live feed no longer provides.
+#
+# 1.7.0: see plugin.py changelog for the full list. Highlights here:
+# - fixed DOM_LANG_TO_METEO['se'] -> 'sv' (Domoticz's actual Swedish
+#   language code; 'se' never matched anything real)
+# - cap:status is now checked - Test/Exercise/Draft/System entries are
+#   skipped, only Actual alerts are shown
+# - needUpdate is now a real before/after fingerprint of the rendered
+#   text instead of a pubDate-based proxy
+# - cap:urgency is surfaced in verbose mode for not-yet-active warnings
+# - fetchFeed() is now a module-level function so multiple Meteo
+#   instances (multi-region) can share a single HTTP fetch per heartbeat
+#   instead of each doing their own
+# - added getDayIconKey() for looking up a severity+type custom icon
 import re
 from datetime import datetime, timedelta
 from time import mktime
-
-# import sys
-# sys.path
-# sys.path.append('/usr/lib/python3/dist-packages')
-# synology
-# sys.path.append('/volume1/@appstore/py3k/usr/local/lib/python3.5/site-packages')
-# windows
-# sys.path.append('C:\\Program Files (x86)\\Python37-32\\Lib\\site-packages')
 
 import feedparser
 import urllib.request
@@ -31,6 +29,8 @@ try:
     import Domoticz
 except ImportError:
     import fakeDomoticz as Domoticz
+
+PLUGIN_VERSION = "1.7.0"
 
 
 def parseCapIsoDate(value):
@@ -58,15 +58,53 @@ def parseCapIsoDate(value):
         return None
 
 
+def fetchFeed(url, timeoutSeconds, userAgent="Domoticz-MeteoAlarmEU-Atom/{}".format(PLUGIN_VERSION)):
+    """fetch and parse a feed URL once. Module-level (not tied to a single
+    Meteo instance) so multiple regions configured against the same feed
+    can share one HTTP fetch per heartbeat instead of each doing their own.
+
+    Arguments:
+        url {str}
+        timeoutSeconds {int}
+        userAgent {str}
+
+    Returns:
+        (feedparser result, bytes) -- the parsed feed and the raw response
+                                        body (kept for debug/error dumps)
+
+    Raises:
+        Exception -- on timeout, HTTP error, connection error, or non-200
+                     status. Always a plain Exception with a clear message,
+                     never the raw urllib/socket exception type, so callers
+                     have one type to catch.
+    """
+    try:
+        req = urllib.request.Request(url, headers={'User-Agent': userAgent})
+        response = urllib.request.urlopen(req, timeout=timeoutSeconds)
+        httpStatus = response.getcode()
+        rawData = response.read()
+    except socket.timeout:
+        raise Exception("timed out after {}s fetching feed".format(timeoutSeconds))
+    except urllib.error.HTTPError as e:
+        raise Exception("HTTP error {} fetching feed".format(e.code))
+    except urllib.error.URLError as e:
+        raise Exception("could not reach feed: {}".format(getattr(e, 'reason', e)))
+
+    if httpStatus != 200:
+        raise Exception("did not find feed for {} (HTTP {})".format(url, httpStatus))
+
+    feed = feedparser.parse(rawData)
+    if getattr(feed, 'bozo', 0):
+        Domoticz.Debug("Feed parsed with warnings (bozo): {}"
+                       .format(getattr(feed, 'bozo_exception', 'unknown')))
+    return feed, rawData
+
+
 class Meteo:
     # ####################################
     # Common definitions
-    # maximum length (chars) of the combined per-day summary text
     MAX_SHOWN_DETAIL_LENGTH = 200
-    # show pub date of rss in name
     SHOW_DATE_IN_NAME = True
-    # timeout (seconds) for fetching the feed - previously unbounded,
-    # a hung connection would block the whole Domoticz heartbeat cycle
     FEED_FETCH_TIMEOUT_SECONDS = 15
 
     AWT_TRANSLATION = {
@@ -90,22 +128,21 @@ class Meteo:
         201: ["Tomorrow", "Morgen", "Imorgon", "Demain", "Mañana", "Huomenna"]
     }
 
-    # dict for switch dom language to Meteo rss stuff
+    # (fixed in 1.7.0: Domoticz's actual language code for Swedish is 'sv'
+    # - 'se' is not a real Domoticz language code and never matched
+    # anything, silently making Swedish behave the same as an unmapped
+    # language. Verified against Domoticz's own ecosystem conventions -
+    # e.g. Dashticz's config uses 'sv_SE' - since a live Domoticz instance
+    # wasn't available to check Settings["Language"] directly.)
     DOM_LANG_TO_METEO = {
         'en': 'English',
         'de': 'German',
-        'se': 'Swedish',
+        'sv': 'Swedish',
         'fr': 'French',
         'es': 'Spanish',
         'fi': 'Finnish'
     }
 
-    # (fixed in 1.6.3: language name -> AWT_TRANSLATION column index. The
-    # old getLangIndex() checked `if 'svenska' in meteoLang` / `'deutsch' in
-    # meteoLang`, but meteoLang is always the *English* language name from
-    # DOM_LANG_TO_METEO ('German', 'Swedish', ...) - those substrings can
-    # never match, so German and Swedish detail-language selection always
-    # silently fell back to English. This matches on the actual values used.)
     LANG_NAME_TO_INDEX = {
         'english': 0,
         'german': 1,
@@ -115,15 +152,26 @@ class Meteo:
         'finnish': 5,
     }
 
-    # meteoalarm's 4-colour awareness scale, taken from the entry <title>
-    # (e.g. "Yellow Thunderstorm Warning issued for ..."), matching the old
-    # plugin's wflag-l1..l4 icon-derived level scale (1=green/none .. 4=red)
     COLOR_TO_LEVEL = {'green': 1, 'yellow': 2, 'orange': 3, 'red': 4}
-    # fallback if the title didn't parse - CAP's own severity vocabulary
     SEVERITY_TO_LEVEL = {'minor': 2, 'moderate': 3, 'severe': 4, 'extreme': 4}
 
     TITLE_PATTERN = re.compile(
         r'^(?P<color>\w+)\s+(?P<type>.+?)\s+Warning issued for', re.IGNORECASE)
+
+    # AWT key -> base name used for the custom severity/type icon set
+    # (see meteoalarm_icons.zip / icons.txt). Kept separate from
+    # AWT_TRANSLATION since icon names are not language-dependent.
+    ICON_NAME_BY_AWT = {
+        1: "Wind", 2: "SnowIce", 3: "Thunderstorm", 4: "Fog", 5: "Hightemp",
+        6: "Lowtemp", 7: "Coastal", 8: "Forestfire", 9: "Avalanche",
+        10: "Rain", 11: "Flood", 12: "Rainflood",
+    }
+    # must match the filename prefix used when packaging meteoalarm_icons.zip
+    ICON_FILE_PREFIX = "MeteoAlarmEUAtom"
+
+    # only these cap:status values represent a real, currently-valid
+    # warning - Test/Exercise/Draft/System entries are excluded
+    VALID_CAP_STATUSES = {'actual'}
 
     def __init__(self, rssUrl="https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-atom-germany", rssCode="202", domLangSetting="de", detailSetting="detail_dom_lang",
                  iconSetting="icon_inline_detail", locationName=""):
@@ -139,7 +187,7 @@ class Meteo:
         self.iconNo = True
 
         self.iconType = ''
-        self.langKey = 0  # 0=en,1=de,2=se,3=fr,4=es,5=fi
+        self.langKey = 0  # 0=en,1=de,2=sv,3=fr,4=es,5=fi
         self._lastRawData = None
         self.configure(domLangSetting, detailSetting, iconSetting)
         self.reset()
@@ -148,21 +196,11 @@ class Meteo:
     def getDayTitle(self, idx):
         '''returns the title or name for the device.
         "Today: {location} ({update time from rss})"
-        Arguments:
-            idx {int} -- 0 for today, 1 for tomorrow
-
-        Returns:
-            str -- the name: like "Today: {location} ({update time from rss})"
         '''
         s = ''
         if self.hasError is True:
             s = getAwtTranslation(idx, self.langKey) + ': ERROR!!!'
         else:
-            # (fixed in 1.6.1/refined in 1.6.3: pubDate can legitimately be
-            # None when the whole feed currently has zero entries anywhere -
-            # e.g. a quiet day with no warnings at all. That's a normal,
-            # good state, not an error - so we just omit the timestamp
-            # instead of crashing on mktime(None) or mislabeling it ERROR.)
             loc = self.location if self.location is not None else self.locationName
             s = getAwtTranslation(idx, self.langKey) + ': ' + loc
             if Meteo.SHOW_DATE_IN_NAME is True and self.pubDate is not None:
@@ -176,19 +214,23 @@ class Meteo:
     def getTomorrowTitle(self):
         return self.getDayTitle(201)
 
-    def configure(self, domLangSetting, detailSetting, iconSetting):
-        '''does the configuration of this service
+    def getDayIconKey(self, idx):
+        '''returns the custom icon name (e.g. "MeteoAlarmEUAtomThunderstormL3")
+        for this day's worst warning, or None if there's no specific
+        category to show or no active warning - callers should treat
+        None as "use the default Alert icon", never as an error.
 
         Arguments:
-            domLangSetting {str} -- the settings from domoticz
-            detailSetting {str} -- configuration of detail/verbosity + language
-            iconSetting {str} -- kept for backward compatibility with existing
-                                  hardware configs; the CAP feed no longer
-                                  provides per-warning icon images, so this
-                                  no longer has any visual effect
+            idx {int} -- 0 for today, 1 for tomorrow
         '''
+        awtKey = self.todayIconAwt if idx == 0 else self.tomorrowIconAwt
+        level = self.todayLevel if idx == 0 else self.tomorrowLevel
+        if awtKey is None or awtKey not in Meteo.ICON_NAME_BY_AWT or not level or level < 1:
+            return None
+        return "{}{}L{}".format(Meteo.ICON_FILE_PREFIX, Meteo.ICON_NAME_BY_AWT[awtKey], int(level))
 
-        # check details and language
+    def configure(self, domLangSetting, detailSetting, iconSetting):
+        '''does the configuration of this service'''
         if detailSetting == 'no_detail' or len(detailSetting) <= 0:
             self.detailNo = True
             Domoticz.Debug("switched details off for status text (compact mode).")
@@ -210,105 +252,61 @@ class Meteo:
             Domoticz.Debug("2#Detail turned on. Language is: '{}'"
                            .format(self.detailLang))
             Domoticz.Debug("settings lang: {}, detail lang: {} key: {}"
-                           .format(domLangSetting, self.detailLang,
-                                   self.langKey))
+                           .format(domLangSetting, self.detailLang, self.langKey))
 
-        # check icon
         if iconSetting == 'icon_no' or len(iconSetting) <= 0:
             self.iconNo = True
         else:
             self.iconNo = False
             self.iconType = iconSetting
-            # (changed in 1.6.3: the CAP feed provides no per-warning icon
-            # images at all, unlike the old RSS/HTML format - this setting
-            # is kept only so existing hardware configs don't break, but it
-            # no longer changes anything visually.)
             Domoticz.Debug(
-                "Icon setting '{}' requested, but the current MeteoAlarm "
-                "Atom/CAP feed does not provide per-warning icon images - "
-                "this setting has no visual effect.".format(iconSetting))
+                "Icon setting '{}' requested - as of 1.7.0 this enables the "
+                "plugin's own bundled severity/type icon set (the feed "
+                "itself no longer provides icons).".format(iconSetting))
 
     def dumpMeteoConfig(self):
-        '''just print configuration and settings to log
-        '''
-
         Domoticz.Log(
             "detailNo: {}\ndetailLang: {}\n"
             "langKey: {}\niconNo: {}\niconType:{}"
-            .format(
-                self.detailNo,
-                self.detailLang,
-                self.langKey,
-                self.iconNo,
-                self.iconType
-            )
+            .format(self.detailNo, self.detailLang, self.langKey, self.iconNo, self.iconType)
         )
 
     def reset(self):
-        '''set all important fields to None
-        '''
-
+        '''set all important fields to None'''
         self.location = None
         self.todayDetail = None
         self.todayLevel = None
+        self.todayIconAwt = None
         self.tomorrowDetail = None
         self.tomorrowLevel = None
+        self.tomorrowIconAwt = None
         self.observationDate = None
         self.pubDate = None
         self.needUpdate = True
         self.resetError()
 
     def setError(self, error):
-        '''sets the error msg and put error flag to True
-
-        Arguments:
-            error {Exception} -- the caught exception
-        '''
         self.hasError = True
         self.errorMsg = error
 
     def resetError(self):
-        '''just removes error flag and deletes last error msg
-        '''
         self.hasError = False
         self.errorMsg = None
 
     def dumpMeteoStatus(self):
-        '''just print current status to log
-        '''
-
         Domoticz.Log(
             "##########################################\n"
             "{} ({}) :\nHeute:\t{}-{}\n\rMorgen:\t{}-{}\nneed update?:\t{}"
             "\nError?: {}\tErrorMsg: {}"
-            .format(
-                self.location,
-                self.pubDate,
-                self.todayLevel,
-                self.todayDetail,
-                self.tomorrowLevel,
-                self.tomorrowDetail,
-                self.needUpdate,
-                self.hasError,
-                self.errorMsg
-            )
+            .format(self.location, self.pubDate, self.todayLevel, self.todayDetail,
+                    self.tomorrowLevel, self.tomorrowDetail, self.needUpdate,
+                    self.hasError, self.errorMsg)
         )
 
     def _extractGeocode(self, entry):
-        '''pull the EMMA_ID region code out of an entry.
-
-        Primary source is the geocode link href
-        (...?geocode=EMMA_ID:LU001), which is explicit and stable.
-        Falls back to feedparser's flattened <cap:geocode><value>
-        element, which lands directly on the entry as `.value` since
-        feedparser flattens unknown-namespace child elements.
-
-        Arguments:
-            entry {feedparser entry}
-
-        Returns:
-            str | None -- the EMMA_ID code, e.g. 'LU001'
-        '''
+        '''pull the EMMA_ID region code out of an entry - primary source is
+        the geocode link href (explicit/stable), falling back to
+        feedparser's flattened cap:geocode value.'''
         for l in entry.get('links', []):
             href = l.get('href', '') or ''
             m = re.search(r'geocode=EMMA_ID:([A-Za-z0-9]+)', href)
@@ -318,16 +316,7 @@ class Meteo:
 
     def _classifyEntry(self, entry):
         '''derive (level, awt-translation-key, human type text) for one
-        matched CAP entry, from its <title> (e.g. "Yellow Thunderstorm
-        Warning issued for Luxembourg - Canton X") with a cap:severity
-        fallback if the title doesn't parse as expected.
-
-        Arguments:
-            entry {feedparser entry}
-
-        Returns:
-            (int, int|None, str) -- (level 1-4, AWT_TRANSLATION key or
-            None if unrecognized, the raw type text from the title)
+        matched CAP entry, from its <title> with a cap:severity fallback.
         '''
         title = str(getattr(entry, 'title', ''))
         m = Meteo.TITLE_PATTERN.match(title)
@@ -369,28 +358,26 @@ class Meteo:
         return level, awtKey, typeText
 
     def _summarizeDay(self, entries, idx):
-        '''build the device text + highest level for one day (today=0,
-        tomorrow=1) from the CAP entries relevant to that day.
-
-        Arguments:
-            entries {list} -- matched feedparser entries active on that day
-            idx {int} -- 0 for today, 1 for tomorrow (used for the
-                         multi-day date/offset formatting)
+        '''build the device text, highest level, and worst-entry AWT key
+        (for icon lookup) for one day (today=0, tomorrow=1).
 
         Returns:
-            (str, int) -- (device text, highest level)
+            (str, int, int|None) -- (device text, highest level, AWT key
+            of the entry that drove the highest level)
         '''
         if not entries:
             d = getAwtTranslation(99, self.langKey)
-            return d, 1
+            return d, 1, None
 
         relevantDate = datetime.now().astimezone() + timedelta(days=idx)
         parts = []
         highestLevel = 0
+        worstAwtKey = None
         for entry in entries:
             level, awtKey, typeText = self._classifyEntry(entry)
             if level > highestLevel:
                 highestLevel = level
+                worstAwtKey = awtKey
             label = getAwtTranslation(awtKey, self.langKey) if awtKey is not None else typeText
 
             if self.detailNo:
@@ -403,128 +390,127 @@ class Meteo:
             expires = parseCapIsoDate(getattr(entry, 'cap_expires', None))
             timeTxt = ''
             if onset is not None and expires is not None:
-                # (multi-day span handling, per the original TODO: "sometimes
-                # until goes for a few days... clock is not enough" - now
-                # driven by the real onset/expires timestamps instead of a
-                # regex-scraped "From: ... Until: ..." text block)
                 startTxt = getSDatesFromDate(onset, relevantDate)[0]
                 endTxt = getSDatesFromDate(expires, relevantDate)[0]
                 timeTxt = " {}-{}".format(startTxt, endTxt)
-            parts.append("{} ({}) {}{}".format(label, level, area, timeTxt))
+
+            # (new in 1.7.0) surface urgency for not-yet-active warnings -
+            # cap:urgency values are Immediate/Expected/Future/Past/Unknown
+            urgency = str(getattr(entry, 'cap_urgency', '') or '').strip().lower()
+            urgencyTxt = ''
+            if urgency == 'future':
+                urgencyTxt = " [upcoming]"
+            elif urgency == 'past':
+                urgencyTxt = " [ending]"
+
+            parts.append("{} ({}) {}{}{}".format(label, level, area, timeTxt, urgencyTxt))
 
         text = "; ".join(parts)
         if len(text) > Meteo.MAX_SHOWN_DETAIL_LENGTH:
             text = text[:Meteo.MAX_SHOWN_DETAIL_LENGTH].rstrip() + "..."
-        return text, highestLevel
+        return text, highestLevel, worstAwtKey
 
-    def _processFeed(self, feed):
-        '''parse an already-fetched feedparser result and update
-        location/pubDate/today/tomorrow state. Split out from
-        readMeteoWarning() so it can be exercised directly against a
-        saved feed sample for testing, independent of the network fetch.
+    def processFetchedFeed(self, feed):
+        '''parse an already-fetched feedparser result and update this
+        instance's location/pubDate/today/tomorrow state for its
+        configured rssCode. Split out from readMeteoWarning() so a single
+        shared fetch (see fetchFeed()) can be processed by several Meteo
+        instances when monitoring multiple regions.
 
         Arguments:
             feed {feedparser result}
         '''
-        firstPubDate = None
-        matchedEntries = []
-
-        for key in feed["entries"]:
-            if firstPubDate is None:
-                firstPubDate = key.get('published_parsed')
-            code = self._extractGeocode(key)
-            if code != self.rssCode:
-                continue
-            matchedEntries.append(key)
-
-        if not matchedEntries:
-            Domoticz.Log("no entry found --> no alert")
-            d = getAwtTranslation(99, self.langKey)
-            newPubDate = firstPubDate
-            self.needUpdate = (self.pubDate != newPubDate) or (self.todayLevel != 1)
-            self.pubDate = newPubDate
-            self.todayDetail = d
-            self.todayLevel = 1
-            self.tomorrowDetail = d
-            self.tomorrowLevel = 1
-            return
-
-        dated = [e for e in matchedEntries if e.get('published_parsed')]
-        newestEntry = max(dated, key=lambda e: e.get('published_parsed')) if dated else matchedEntries[0]
-        newPubDate = newestEntry.get('published_parsed')
-        newLocation = str(getattr(newestEntry, 'cap_areadesc', '')) or self.locationName
-
-        self.needUpdate = (self.pubDate != newPubDate)
-        self.pubDate = newPubDate
-        self.location = newLocation
-
-        now = datetime.now().astimezone()
-        today = now.date()
-        tomorrow = (now + timedelta(days=1)).date()
-
-        todayEntries = []
-        tomorrowEntries = []
-        for entry in matchedEntries:
-            onset = parseCapIsoDate(getattr(entry, 'cap_onset', None)) \
-                or parseCapIsoDate(getattr(entry, 'cap_effective', None)) or now
-            expires = parseCapIsoDate(getattr(entry, 'cap_expires', None)) or onset
-            onsetDate = onset.date()
-            expiresDate = expires.date()
-            if onsetDate <= today <= expiresDate:
-                todayEntries.append(entry)
-            if onsetDate <= tomorrow <= expiresDate:
-                tomorrowEntries.append(entry)
-
-        self.todayDetail, self.todayLevel = self._summarizeDay(todayEntries, 0)
-        self.tomorrowDetail, self.tomorrowLevel = self._summarizeDay(tomorrowEntries, 1)
-
-    def readMeteoWarning(self):
-        """tries to get rss data from Meteo and parse it.
-        Values are stored on attributes.
-        check self.needUpdate. if we get new data we set a flag there.
-
-        """
-
-        self._lastRawData = None
-
         try:
-            Domoticz.Debug('Retrieve meteo weather data from ' + self.rssUrl)
+            prevFingerprint = (self.todayLevel, self.todayDetail,
+                                self.tomorrowLevel, self.tomorrowDetail)
+            self.resetError()
 
-            # fetch manually with an explicit timeout instead of letting
-            # feedparser.parse() do its own unbounded fetch - previously a
-            # hung/slow connection here would block the entire Domoticz
-            # heartbeat cycle indefinitely.
-            try:
-                req = urllib.request.Request(
-                    self.rssUrl,
-                    headers={'User-Agent': 'Domoticz-MeteoAlarmEU-Atom/1.6.3'})
-                response = urllib.request.urlopen(
-                    req, timeout=Meteo.FEED_FETCH_TIMEOUT_SECONDS)
-                httpStatus = response.getcode()
-                self._lastRawData = response.read()
-            except socket.timeout:
-                raise Exception("timed out after {}s fetching feed"
-                                .format(Meteo.FEED_FETCH_TIMEOUT_SECONDS))
-            except urllib.error.HTTPError as e:
-                raise Exception("HTTP error {} fetching feed".format(e.code))
-            except urllib.error.URLError as e:
-                raise Exception("could not reach feed: {}"
-                                .format(getattr(e, 'reason', e)))
+            firstPubDate = None
+            matchedEntries = []
+            skippedNonActual = 0
 
-            if httpStatus != 200:
-                raise Exception("did not find feed for {} (HTTP {})"
-                                .format(self.rssUrl, httpStatus))
+            for key in feed["entries"]:
+                if firstPubDate is None:
+                    firstPubDate = key.get('published_parsed')
+                code = self._extractGeocode(key)
+                if code != self.rssCode:
+                    continue
+                # (new in 1.7.0) only Actual alerts count - Test/Exercise/
+                # Draft/System messages are part of the CAP spec but are
+                # not real warnings
+                status = str(getattr(key, 'cap_status', '') or 'Actual').strip().lower()
+                if status not in Meteo.VALID_CAP_STATUSES:
+                    skippedNonActual += 1
+                    continue
+                matchedEntries.append(key)
 
-            feed = feedparser.parse(self._lastRawData)
+            if skippedNonActual:
+                Domoticz.Debug("Skipped {} non-Actual (Test/Exercise/Draft/System) "
+                               "entries for code {}".format(skippedNonActual, self.rssCode))
 
-            if getattr(feed, 'bozo', 0):
-                Domoticz.Debug("Feed parsed with warnings (bozo): {}"
-                               .format(getattr(feed, 'bozo_exception', 'unknown')))
+            if not matchedEntries:
+                Domoticz.Log("no entry found --> no alert")
+                d = getAwtTranslation(99, self.langKey)
+                self.pubDate = firstPubDate
+                self.todayDetail = d
+                self.todayLevel = 1
+                self.todayIconAwt = None
+                self.tomorrowDetail = d
+                self.tomorrowLevel = 1
+                self.tomorrowIconAwt = None
+            else:
+                dated = [e for e in matchedEntries if e.get('published_parsed')]
+                newestEntry = max(dated, key=lambda e: e.get('published_parsed')) if dated else matchedEntries[0]
+                self.pubDate = newestEntry.get('published_parsed')
+                self.location = str(getattr(newestEntry, 'cap_areadesc', '')) or self.locationName
 
-            self._processFeed(feed)
+                now = datetime.now().astimezone()
+                today = now.date()
+                tomorrow = (now + timedelta(days=1)).date()
+
+                todayEntries = []
+                tomorrowEntries = []
+                for entry in matchedEntries:
+                    onset = parseCapIsoDate(getattr(entry, 'cap_onset', None)) \
+                        or parseCapIsoDate(getattr(entry, 'cap_effective', None)) or now
+                    expires = parseCapIsoDate(getattr(entry, 'cap_expires', None)) or onset
+                    onsetDate = onset.date()
+                    expiresDate = expires.date()
+                    if onsetDate <= today <= expiresDate:
+                        todayEntries.append(entry)
+                    if onsetDate <= tomorrow <= expiresDate:
+                        tomorrowEntries.append(entry)
+
+                self.todayDetail, self.todayLevel, self.todayIconAwt = self._summarizeDay(todayEntries, 0)
+                self.tomorrowDetail, self.tomorrowLevel, self.tomorrowIconAwt = self._summarizeDay(tomorrowEntries, 1)
+
+            # (fixed in 1.7.0: needUpdate was inferred from a pubDate/level
+            # proxy comparison, which could miss real content changes or
+            # flag unchanged content as changed. Now it's a direct
+            # before/after fingerprint of what's actually rendered.)
+            newFingerprint = (self.todayLevel, self.todayDetail,
+                               self.tomorrowLevel, self.tomorrowDetail)
+            self.needUpdate = (newFingerprint != prevFingerprint)
             self.lastUpdate = datetime.now()
 
-        except (Exception) as e:
+        except Exception as e:
+            Domoticz.Error("Error processing feed for region '{}': {}".format(self.rssCode, e))
+            self.setError(e)
+
+    def readMeteoWarning(self):
+        """single-instance convenience wrapper: fetches the feed and
+        processes it for this instance's region. For multi-region use,
+        prefer calling the module-level fetchFeed() once and passing the
+        result to processFetchedFeed() on each Meteo instance instead, to
+        avoid redundant HTTP fetches of the same feed.
+        """
+        self._lastRawData = None
+        try:
+            Domoticz.Debug('Retrieve meteo weather data from ' + self.rssUrl)
+            feed, rawData = fetchFeed(self.rssUrl, Meteo.FEED_FETCH_TIMEOUT_SECONDS)
+            self._lastRawData = rawData
+            self.processFetchedFeed(feed)
+        except Exception as e:
             Domoticz.Error("Error: " + str(e) + " URL: " + self.rssUrl)
             if self._lastRawData is not None:
                 preview = self._lastRawData[:500]
@@ -541,16 +527,9 @@ class Meteo:
 
 
 def getMeteoLang(domLanguage):
-    """translate the domoticz language from Settings["Language"] to meteo confrom.
-    eg: Domoticz: de -> meteo: German (the AWT_TRANSLATION column name).
-
-    Arguments:
-        domLanguage {str} -- value from domoticz settings for language
-
-    Returns:
-        str -- the matching language name used to pick an AWT_TRANSLATION column
+    """translate the domoticz language code (Settings["Language"]) to the
+    matching AWT_TRANSLATION column name.
     """
-
     if domLanguage in Meteo.DOM_LANG_TO_METEO:
         mLang = Meteo.DOM_LANG_TO_METEO[domLanguage]
     else:
@@ -562,32 +541,15 @@ def getMeteoLang(domLanguage):
 
 
 def getLangIndex(meteoLang):
-    """takes the language name from getMeteoLang()/detailSetting and maps
-    it to the matching AWT_TRANSLATION column index. Falls back to English
-    (0) for anything unrecognized.
-
-    Arguments:
-        meteoLang {str} -- language name, e.g. 'German', 'Swedish'
-
-    Returns:
-        int -- AWT_TRANSLATION column index, 0-5
+    """maps a language name (e.g. 'German', 'Swedish') to its
+    AWT_TRANSLATION column index. Falls back to English (0) for anything
+    unrecognized.
     """
-
     return Meteo.LANG_NAME_TO_INDEX.get(str(meteoLang).strip().lower(), 0)
 
 
 def getAwtTranslation(idx, langIndex):
-    """
-    takes the key from meteo and looks for defined translation
-
-    Arguments:
-        idx {[type]} -- key/index from meteo rss awt, but its extended, so 99 works as well
-        langIndex {int} -- index into the AWT_TRANSLATION language columns (0-5)
-
-    Returns:
-        str -- translated longform for given awt key
-    """
-
+    """looks up the translated label for an AWT key + language index."""
     txt = str(idx)
     if int(idx) in Meteo.AWT_TRANSLATION:
         t = Meteo.AWT_TRANSLATION[int(idx)]
@@ -601,20 +563,9 @@ def getAwtTranslation(idx, langIndex):
 
 def getSDatesFromDate(date, relevantDate):
     '''format a datetime relative to relevantDate (today's or tomorrow's
-    device date). If it falls on the same calendar day as relevantDate,
-    just the time is shown; otherwise the date, time, and a day-offset are
-    shown too - this is what actually implements the "sometimes until goes
-    for a few days... clock is not enough" TODO, now driven by real
-    cap:onset/cap:expires timestamps instead of regex-scraped RSS text.
-
-    Arguments:
-        date {datetime} -- a timezone-aware or naive datetime (from
-                            parseCapIsoDate)
-        relevantDate {datetime} -- the day being rendered (today or
-                                    tomorrow, as a datetime)
-
-    Returns:
-        [array] -- [shortDate, longDate]
+    device date), showing date + day-offset when it falls on a different
+    calendar day - implements multi-day span display using real
+    cap:onset/cap:expires timestamps.
     '''
     longDate = "{}.{}. {:02d}:{:02d}".format(date.day, date.month, date.hour, date.minute)
     dayDelta = (date.date() - relevantDate.date()).days
