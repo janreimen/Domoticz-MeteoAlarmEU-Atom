@@ -182,6 +182,25 @@ class TestLanguageMapping(unittest.TestCase):
         result = meteo.getMeteoLang('xx')
         self.assertEqual(result, 'English')
 
+    def test_luxembourgish_lang_index(self):
+        self.assertEqual(meteo.getLangIndex('Luxembourgish'), 6)
+
+    def test_luxembourgish_translation_used_end_to_end(self):
+        entries = make_entry("LU001", "Area", "Red Thunderstorm Warning issued for Luxembourg - Area",
+                              "Severe thunderstorm warning", "Severe", -1, 3)
+        feed = build_feed(entries)
+        m = meteo.Meteo(rssUrl="dummy", rssCode="LU001", domLangSetting="fr",
+                         detailSetting="Luxembourgish", iconSetting="icon_no",
+                         locationName="Test Location")
+        m.processFetchedFeed(feed)
+        # "Donnerwieder" is the confirmed Luxembourgish word for thunderstorm
+        self.assertIn("Donnerwieder", m.todayDetail)
+
+    def test_luxembourgish_not_auto_detected_from_domoticz_language(self):
+        # 'lb' is deliberately not in DOM_LANG_TO_METEO (see comment in
+        # meteo.py) - falls back to English rather than erroring
+        self.assertEqual(meteo.getMeteoLang('lb'), 'English')
+
 
 class TestIconKeyLookup(unittest.TestCase):
     def test_icon_key_matches_warning_type_and_level(self):
@@ -197,6 +216,21 @@ class TestIconKeyLookup(unittest.TestCase):
         m = make_meteo("LU001")
         m.processFetchedFeed(feed)
         self.assertIsNone(m.getDayIconKey(0))
+
+    def test_icon_no_setting_is_respected(self):
+        # regression test: getDayIconKey() previously ignored self.iconNo
+        # entirely, so selecting "NO_ICON" (Mode6) had no effect as long
+        # as the icon zip loaded - only the plugin-level iconsLoaded flag
+        # gated it, never the user's actual setting.
+        entries = make_entry("LU001", "Area", "Red Thunderstorm Warning issued for Luxembourg - Area",
+                              "Severe thunderstorm warning", "Severe", -1, 3)
+        feed = build_feed(entries)
+        m = meteo.Meteo(rssUrl="dummy", rssCode="LU001", domLangSetting="en",
+                         detailSetting="detail_dom_lang", iconSetting="icon_no",
+                         locationName="Test Location")
+        m.processFetchedFeed(feed)
+        self.assertEqual(m.todayLevel, 4, "sanity check: the warning itself should still be detected")
+        self.assertIsNone(m.getDayIconKey(0), "icon_no should suppress the icon regardless of iconsLoaded")
 
 
 class TestGeocodeExtraction(unittest.TestCase):
@@ -220,3 +254,4 @@ class TestGeocodeExtraction(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)
+

@@ -1,21 +1,9 @@
 # moved logic of Meteo rss warning to extra class
 #
-# 1.6.3: rewritten to parse the real CAP-Atom feed fields directly
-# (cap:event, cap:severity, cap:onset, cap:expires) instead of the old
-# HTML-table/icon scraping the live feed no longer provides.
-#
-# 1.7.0: see plugin.py changelog for the full list. Highlights here:
-# - fixed DOM_LANG_TO_METEO['se'] -> 'sv' (Domoticz's actual Swedish
-#   language code; 'se' never matched anything real)
-# - cap:status is now checked - Test/Exercise/Draft/System entries are
-#   skipped, only Actual alerts are shown
-# - needUpdate is now a real before/after fingerprint of the rendered
-#   text instead of a pubDate-based proxy
-# - cap:urgency is surfaced in verbose mode for not-yet-active warnings
-# - fetchFeed() is now a module-level function so multiple Meteo
-#   instances (multi-region) can share a single HTTP fetch per heartbeat
-#   instead of each doing their own
-# - added getDayIconKey() for looking up a severity+type custom icon
+# Parses meteoalarm.org's CAP-Atom feed directly (cap:event, cap:severity,
+# cap:onset, cap:expires, cap:status, cap:urgency) - see plugin.py's
+# docstring for the full version history; this file follows the same
+# version number.
 import re
 from datetime import datetime, timedelta
 from time import mktime
@@ -30,7 +18,7 @@ try:
 except ImportError:
     import fakeDomoticz as Domoticz
 
-PLUGIN_VERSION = "1.7.0"
+PLUGIN_VERSION = "1.7.1"
 
 
 def parseCapIsoDate(value):
@@ -108,24 +96,24 @@ class Meteo:
     FEED_FETCH_TIMEOUT_SECONDS = 15
 
     AWT_TRANSLATION = {
-        # idx: [English, German, Swedish, French, Spanish, Finnish]
-        1: ["Wind", "Wind", "Wind", "Vent", "Viento", "Tuuli"],
-        2: ["Snow/Ice", "Schnee/Eis", "Snö/Is", "Neige/Verglas", "Nieve/Hielo", "Lumi/Jää"],
-        3: ["ThunderStorm", "Gewitter", "Åska", "Orage", "Tormenta", "Ukkonen"],
-        4: ["Fog", "Nebel", "Dimma", "Brouillard", "Niebla", "Sumu"],
-        5: ["High Temp", "Hohe Temp.", "Hög temp.", "Températures élevées", "Temperatura alta", "Korkea lämpötila"],
-        6: ["Low Temp", "Niedrige Temp.", "Låg temp.", "Températures basses", "Temperatura baja", "Matala lämpötila"],
-        7: ["Coastal Event", "Küstenereignis", "Kusthändelse", "Phénomène côtier", "Fenómeno costero", "Rannikkoilmiö"],
-        8: ["Forestfire", "Waldbrand", "Skogsbrand", "Feu de forêt", "Incendio forestal", "Metsäpalo"],
-        9: ["Avalanches", "Lawinen", "Laviner", "Avalanches", "Avalanchas", "Lumivyöryt"],
-        10: ["Rain", "Regen", "Regn", "Pluie", "Lluvia", "Sade"],
-        11: ["Flood", "Flut", "Översvämning", "Inondation", "Inundación", "Tulva"],
-        12: ["Rain-Flood", "Regen-Flut", "Regn-Översvämning", "Pluie-Inondation", "Lluvia-Inundación", "Sade-Tulva"],
+        # idx: [English, German, Swedish, French, Spanish, Finnish, Luxembourgish]
+        1: ["Wind", "Wind", "Wind", "Vent", "Viento", "Tuuli", "Wand"],
+        2: ["Snow/Ice", "Schnee/Eis", "Snö/Is", "Neige/Verglas", "Nieve/Hielo", "Lumi/Jää", "Schnéi/Äis"],
+        3: ["ThunderStorm", "Gewitter", "Åska", "Orage", "Tormenta", "Ukkonen", "Donnerwieder"],
+        4: ["Fog", "Nebel", "Dimma", "Brouillard", "Niebla", "Sumu", "Niwel"],
+        5: ["High Temp", "Hohe Temp.", "Hög temp.", "Températures élevées", "Temperatura alta", "Korkea lämpötila", "Héich Temperaturen"],
+        6: ["Low Temp", "Niedrige Temp.", "Låg temp.", "Températures basses", "Temperatura baja", "Matala lämpötila", "Niddreg Temperaturen"],
+        7: ["Coastal Event", "Küstenereignis", "Kusthändelse", "Phénomène côtier", "Fenómeno costero", "Rannikkoilmiö", "Küstenevenement"],
+        8: ["Forestfire", "Waldbrand", "Skogsbrand", "Feu de forêt", "Incendio forestal", "Metsäpalo", "Bëschbrand"],
+        9: ["Avalanches", "Lawinen", "Laviner", "Avalanches", "Avalanchas", "Lumivyöryt", "Avalangen"],
+        10: ["Rain", "Regen", "Regn", "Pluie", "Lluvia", "Sade", "Reen"],
+        11: ["Flood", "Flut", "Översvämning", "Inondation", "Inundación", "Tulva", "Iwwerschwemmung"],
+        12: ["Rain-Flood", "Regen-Flut", "Regn-Översvämning", "Pluie-Inondation", "Lluvia-Inundación", "Sade-Tulva", "Reen-Iwwerschwemmung"],
         99: ["No special awareness required", "Allet knorke!", "Ingen särskild uppmärksamhet krävs",
              "Aucune vigilance particulière requise", "No se requiere atención especial",
-             "Ei erityistä varautumista vaadita"],
-        200: ["Today", "Heute", "Idag", "Aujourd'hui", "Hoy", "Tänään"],
-        201: ["Tomorrow", "Morgen", "Imorgon", "Demain", "Mañana", "Huomenna"]
+             "Ei erityistä varautumista vaadita", "Keng speziell Opmierksamkeet néideg"],
+        200: ["Today", "Heute", "Idag", "Aujourd'hui", "Hoy", "Tänään", "Haut"],
+        201: ["Tomorrow", "Morgen", "Imorgon", "Demain", "Mañana", "Huomenna", "Muer"]
     }
 
     # (fixed in 1.7.0: Domoticz's actual language code for Swedish is 'sv'
@@ -134,6 +122,12 @@ class Meteo:
     # language. Verified against Domoticz's own ecosystem conventions -
     # e.g. Dashticz's config uses 'sv_SE' - since a live Domoticz instance
     # wasn't available to check Settings["Language"] directly.)
+    #
+    # Luxembourgish ('lb') is intentionally NOT mapped here: Domoticz's
+    # built-in UI languages don't appear to include Luxembourgish, so
+    # auto-detecting it from Settings["Language"] would never trigger.
+    # It's offered instead as an explicit Mode5 choice ("Luxembourgish"),
+    # same as the other non-auto-detected options.
     DOM_LANG_TO_METEO = {
         'en': 'English',
         'de': 'German',
@@ -150,6 +144,7 @@ class Meteo:
         'french': 3,
         'spanish': 4,
         'finnish': 5,
+        'luxembourgish': 6,
     }
 
     COLOR_TO_LEVEL = {'green': 1, 'yellow': 2, 'orange': 3, 'red': 4}
@@ -179,15 +174,12 @@ class Meteo:
         self.rssUrl = rssUrl
         self.locationName = locationName
         self.lastUpdate = datetime.now()
-        self.debug = False
-        self.error = False
-        self.nextpoll = datetime.now()
         self.detailNo = True
         self.detailLang = "English"
         self.iconNo = True
 
         self.iconType = ''
-        self.langKey = 0  # 0=en,1=de,2=sv,3=fr,4=es,5=fi
+        self.langKey = 0  # 0=en,1=de,2=sv,3=fr,4=es,5=fi,6=lb
         self._lastRawData = None
         self.configure(domLangSetting, detailSetting, iconSetting)
         self.reset()
@@ -217,12 +209,19 @@ class Meteo:
     def getDayIconKey(self, idx):
         '''returns the custom icon name (e.g. "MeteoAlarmEUAtomThunderstormL3")
         for this day's worst warning, or None if there's no specific
-        category to show or no active warning - callers should treat
-        None as "use the default Alert icon", never as an error.
+        category to show, no active warning, or icons are switched off
+        (Mode6 = NO_ICON) - callers should treat None as "use the default
+        Alert icon", never as an error.
 
         Arguments:
             idx {int} -- 0 for today, 1 for tomorrow
         '''
+        # (fixed: this previously ignored self.iconNo entirely, so
+        # selecting "NO_ICON" in Mode6 had no effect as long as the icon
+        # zip loaded successfully - the only gate was the plugin-level
+        # iconsLoaded flag, not the user's actual setting.)
+        if self.iconNo:
+            return None
         awtKey = self.todayIconAwt if idx == 0 else self.tomorrowIconAwt
         level = self.todayLevel if idx == 0 else self.tomorrowLevel
         if awtKey is None or awtKey not in Meteo.ICON_NAME_BY_AWT or not level or level < 1:
@@ -280,7 +279,6 @@ class Meteo:
         self.tomorrowDetail = None
         self.tomorrowLevel = None
         self.tomorrowIconAwt = None
-        self.observationDate = None
         self.pubDate = None
         self.needUpdate = True
         self.resetError()
@@ -394,8 +392,6 @@ class Meteo:
                 endTxt = getSDatesFromDate(expires, relevantDate)[0]
                 timeTxt = " {}-{}".format(startTxt, endTxt)
 
-            # (new in 1.7.0) surface urgency for not-yet-active warnings -
-            # cap:urgency values are Immediate/Expected/Future/Past/Unknown
             urgency = str(getattr(entry, 'cap_urgency', '') or '').strip().lower()
             urgencyTxt = ''
             if urgency == 'future':
@@ -435,9 +431,6 @@ class Meteo:
                 code = self._extractGeocode(key)
                 if code != self.rssCode:
                     continue
-                # (new in 1.7.0) only Actual alerts count - Test/Exercise/
-                # Draft/System messages are part of the CAP spec but are
-                # not real warnings
                 status = str(getattr(key, 'cap_status', '') or 'Actual').strip().lower()
                 if status not in Meteo.VALID_CAP_STATUSES:
                     skippedNonActual += 1
@@ -484,10 +477,6 @@ class Meteo:
                 self.todayDetail, self.todayLevel, self.todayIconAwt = self._summarizeDay(todayEntries, 0)
                 self.tomorrowDetail, self.tomorrowLevel, self.tomorrowIconAwt = self._summarizeDay(tomorrowEntries, 1)
 
-            # (fixed in 1.7.0: needUpdate was inferred from a pubDate/level
-            # proxy comparison, which could miss real content changes or
-            # flag unchanged content as changed. Now it's a direct
-            # before/after fingerprint of what's actually rendered.)
             newFingerprint = (self.todayLevel, self.todayDetail,
                                self.tomorrowLevel, self.tomorrowDetail)
             self.needUpdate = (newFingerprint != prevFingerprint)
@@ -576,3 +565,4 @@ def getSDatesFromDate(date, relevantDate):
             date.day, date.month, date.hour, date.minute, dayDelta)
     result = [shortDate, longDate]
     return result
+

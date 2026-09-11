@@ -1,25 +1,17 @@
 # plugin for displaying weather warnigs
 #
-# Author: janreimen, belze
+# Author: belze
 #
 """
 MeteoAlarmEU RSS Reader Plugin
 
-Author: JanReimen(2026), Belze(2018-2022), Ycahome(2017)
+Author: Belze(2018/2019/2020/2022), Ycahome(2017), JanReimen(2026)
 
 
-Version:    1.0.0: Initial Version
-            1.0.1: Minor bug fixes
-            1.0.2: Bug Correction
-            1.3.0: switched to from bs4 import BeautifulSoup by blz
-            1.3.1: add option to show details and also use highest level for alarm level if multiple entries
-            1.3.2: add option to show alarm icon from rss feed and switch language
-            1.3.3: add option to use language from domoticz settings
-            1.4.0: moved to extra class
-            1.4.1: cleaned up a bit and added comments on functions
-            1.4.2: bit more stability and better handling for wrong feed url
-            1.5.0: new way to get rss feed
-            1.6.0: switched over from RSS to ATOM Feeds - janreimen branch
+Version:    1.0.0-1.5.0: original belze/ycahome plugin - initial version
+                   through bug fixes, BeautifulSoup-based RSS parsing,
+                   detail/language/icon options, and a class-based rewrite.
+            1.6.0: switched over from RSS to ATOM Feeds
             1.6.1: fixed onStart/onHeartbeat crash when self.mt never got
                    initialized (UnboundLocalError in getMeteoLang, missing
                    pollinterval fallback); guarded onHeartbeat against
@@ -61,13 +53,15 @@ Version:    1.0.0: Initial Version
                    been verified against a live Domoticz instance; if
                    icons don't appear, the plugin still works normally,
                    it just falls back to the default Alert icon.
+            1.7.1: fixed getDayIconKey() ignoring self.iconNo (NO_ICON
+                   setting had no effect as long as the icon zip loaded).
+                   Added Luxembourgish as a 7th detail-language option.
+                   Removed dead code found during cleanup (unused
+                   imports, unused Meteo/BasePlugin attributes, unused
+                   helper functions). See CHANGELOG.md for full detail
+                   and the reasoning behind each change.
 
-"""
-"""
-
-
-<plugin key="MeteoAlarmEU-Atom" name="Meteo Alarm EU RSS Reader Atom" author="belze,ycahome,janreimen" version="1.7.0" wikilink="" externallink="
-http://www.domoticz.com/forum/viewtopic.php?f=65&t=19519">
+<plugin key="MeteoAlarmEU-Atom" name="Meteo Alarm EU RSS Reader Atom" author="belze,ycahome,janreimen" version="1.7.1" wikilink="" externallink="https://www.github.com/janreimen/Domoticz-MeteoAlarmEU-Atom.git">
      <description>
         <h2>Meteo Alarm EU RSS Reader eXtended</h2><br/>
         <h3>Features</h3>
@@ -75,7 +69,7 @@ http://www.domoticz.com/forum/viewtopic.php?f=65&t=19519">
             <li>shows warnings for today and tomorrow, for one or more regions</li>
             <li>using domoticz alarm level to signal the risk</li>
             <li>detail level can be chosen</li>
-            <li>supports english, german, swedish, french, spanish, finnish</li>
+            <li>supports english, german, swedish, french, spanish, finnish, luxembourgish</li>
             <li>meteo publish date is shown in name</li>
             <li>if problems occur eg. missing libs - devices will show it</li>
         </ul>
@@ -91,10 +85,8 @@ http://www.domoticz.com/forum/viewtopic.php?f=65&t=19519">
     </description>
 
     <params>
-        <param field="Mode1" label="RSSFeed" width="400px" required="true" default="https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-atom-lux
-embourg"/>
-        <param field="Mode2" label="RSSCode (primary region)" width="400px" required="true" default="202"/>
-        <param field="Address" label="Additional Region Codes (comma-separated, optional)" width="400px" required="false" default=""/>
+        <param field="Mode1" label="RSSFeed" width="400px" required="true" default="https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-atom-luxembourg"/>
+        <param field="Mode2" label="RSSCode (primary region, supports comma-separated list)" width="400px" required="true" default="LU002, LU001"/>
         <param field="Mode3" label="Update every x minutes" width="200px" required="true" default="300"/>
         <param field="Mode4" label="Debug" width="75px">
             <options>
@@ -105,7 +97,7 @@ embourg"/>
         <param field="Mode5" label="Details and Language for Status" width="200px"
         title="here you can choose if more details from rss should be shown and if so - which language to use">
             <options>
-                <option label="NO_DETAIL" value="no_detail"  selected="selected"/>
+                <option label="NO_DETAIL" value="no_detail" />
                 <option label="Details using domoticz lang" value="detail_dom_lang"/>
                 <option label="Details in English" value="English"   />
                 <option label="Details auf Deutsch" value="German"   />
@@ -113,6 +105,7 @@ embourg"/>
                 <option label="Details in Spanish" value="Spanish"   />
                 <option label="Details in French" value="French"   />
                 <option label="Details in Finnish" value="Finnish"   />
+                <option label="Detailer op Lëtzebuergesch" value="Luxembourgish"  selected="selected" />
             </options>
         </param>
         <param field="Mode6" label="Show Alarm Icons" width="200px"
@@ -127,25 +120,17 @@ embourg"/>
 </plugin>
 """
 
-import datetime as dt
-import json
-import re
 import os
 from datetime import datetime, timedelta
-from math import asin, cos, radians, sin, sqrt
-from os import path
-
 
 import meteo
 from meteo import Meteo
 
-# TODO
-# - langauge
-#  - use langauge from dom Settings["Language"] - en,de,..  (done - see 1.6.1/1.6.3)
-#  - if defined lang not found in rss -> english as fallback? (done - see 1.6.1)
-# - icon filenames/packaging format used by meteoalarm_icons.zip is built
-#   against documented Domoticz plugin-icon conventions but is UNVERIFIED
-#   against a live Domoticz instance - test and adjust if icons don't load
+# KNOWN ISSUE - unverified: icon filenames/packaging format used by
+# meteoalarm_icons.zip is built against documented Domoticz plugin-icon
+# conventions but has not been confirmed against a live Domoticz instance.
+# If icons don't appear, the plugin still works normally (falls back to
+# the default Alert icon) - see README "Bugs and ToDos".
 
 
 try:
@@ -153,10 +138,9 @@ try:
 except ImportError:
     import fakeDomoticz as Domoticz
 
-# sys.path
-# sys.path.append('/usr/lib/python3/dist-packages')
-# sys.path.append('/volume1/@appstore/py3k/usr/local/lib/python3.5/site-packages')
-# sys.path.append('C:\\Program Files (x86)\\Python37-32\\Lib\\site-packages')
+# If running on Windows or Synology and downloaded modules aren't found,
+# add the relevant site-packages path here, e.g.:
+# import sys; sys.path.append('/path/to/site-packages')
 
 # fallback polling interval (minutes) used if Mode3 is missing/invalid
 DEFAULT_POLL_MINUTES = 300
@@ -181,7 +165,6 @@ class BasePlugin:
 
     def __init__(self):
         self.debug = False
-        self.error = False
         self.errorCounter = 0
         self.nextpoll = datetime.now()
 
@@ -237,10 +220,10 @@ class BasePlugin:
                             "legacy RSS feeds were sunset; use a '...legacy-atom-<region>' URL"
                             .format(self.rssUrl))
 
-        # (new in 1.7.0) additional region codes, comma-separated, sharing
-        # the same feed URL - the primary Mode2 code is always index 0 and
-        # keeps the original Unit 1/2 devices for backward compatibility
-        additionalCodes = [c.strip() for c in Parameters.get("Address", "").split(",") if c.strip()]
+        # additional region codes, comma-separated, sharing the same feed
+        # URL - the primary Mode2 code is always index 0 and keeps the
+        # original Unit 1/2 devices for backward compatibility
+        additionalCodes = [c.strip() for c in Parameters.get("Mode2", "").split(",") if c.strip()]
         allCodes = [primaryCode] + additionalCodes
         if additionalCodes:
             Domoticz.Log("Monitoring {} regions: {}".format(len(allCodes), ", ".join(allCodes)))
@@ -262,9 +245,9 @@ class BasePlugin:
         if self.debug is True:
             self.meteoList[0].dumpMeteoConfig()
 
-        # (new in 1.7.0) load the bundled severity+type icon set. This is
-        # never allowed to prevent the plugin from working - any failure
-        # here just means devices fall back to the default Alert icon.
+        # load the bundled severity+type icon set. This is never allowed
+        # to prevent the plugin from working - any failure here just
+        # means devices fall back to the default Alert icon.
         self._loadIcons()
 
         createDevices(len(self.meteoList))
@@ -313,9 +296,9 @@ class BasePlugin:
         if now < self.nextpoll:
             return
 
-        # (new in 1.7.0) fetch the feed ONCE per heartbeat and share it
-        # across all configured regions, instead of each region doing its
-        # own redundant HTTP fetch of what is the same feed content.
+        # fetch the feed ONCE per heartbeat and share it across all
+        # configured regions, instead of each region doing its own
+        # redundant HTTP fetch of what is the same feed content.
         try:
             feed, rawData = meteo.fetchFeed(self.rssUrl, Meteo.FEED_FETCH_TIMEOUT_SECONDS)
         except Exception as e:
@@ -435,22 +418,6 @@ def DumpConfigToLog():
     return
 
 
-def parseIntValue(s):
-    """Parse an int and return None if no int is given"""
-    try:
-        return int(s)
-    except:
-        return None
-
-
-def parseFloatValue(s):
-    """Parse a float and return None if no float is given"""
-    try:
-        return float(s)
-    except:
-        return None
-
-
 #############################################################################
 #                       Device specific functions                           #
 #############################################################################
@@ -477,7 +444,6 @@ def createDevices(regionCount):
         Domoticz.Device(Name="Last Successful Update", Unit=4, TypeName="Text", Used=1).Create()
         Domoticz.Log("Devices[4] (Last Successful Update) created.")
 
-    # (new in 1.7.0) additional regions get their own numbered device pairs
     for i in range(1, regionCount):
         todayUnit, tomorrowUnit = unitsForRegion(i)
         code = _plugin.meteoList[i].rssCode if i < len(_plugin.meteoList) else "region {}".format(i + 1)
@@ -501,9 +467,9 @@ def updateDevice(Unit, highestLevel, alarmData, name='', alwaysUpdate=False, ima
     Optional Arguments:
         name {str} -- optional: to set the device's display name
         alwaysUpdate {bool} -- optional: ignore current status/needs update
-        imageName {str} -- optional (new in 1.7.0): custom icon name from
-                            Images, e.g. "MeteoAlarmEUAtomThunderstormL3".
-                            Ignored if not found in Images - never an error.
+        imageName {str} -- optional: custom icon name from Images, e.g.
+                            "MeteoAlarmEUAtomThunderstormL3". Ignored if
+                            not found in Images - never an error.
     '''
     if Unit not in Devices:
         Domoticz.Error("Devices[{}] is unknown. So we cannot update it.".format(Unit))
@@ -521,3 +487,4 @@ def updateDevice(Unit, highestLevel, alarmData, name='', alwaysUpdate=False, ima
         Domoticz.Log("BLZ: Awareness Updated to: {} value: {}".format(alarmData, highestLevel))
     else:
         Domoticz.Log("BLZ: Awareness Remains Unchanged")
+
