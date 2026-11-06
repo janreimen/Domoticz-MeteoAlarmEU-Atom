@@ -5,8 +5,8 @@
 # docstring for the full version history; this file follows the same
 # version number.
 import re
+from calendar import timegm
 from datetime import datetime, timedelta
-from time import mktime
 
 import feedparser
 import urllib.request
@@ -18,7 +18,103 @@ try:
 except ImportError:
     import fakeDomoticz as Domoticz
 
-PLUGIN_VERSION = "1.7.1"
+PLUGIN_VERSION = "1.7.2"
+
+# used only for early sanity-check warnings, never to reject a URL: a
+# non-matching URL is still used exactly as configured
+EXPECTED_FEED_HOST = "feeds.meteoalarm.org"
+EXPECTED_FEED_PATH_HINT = "atom"
+
+# MeteoAlarm EMMA_ID region codes are two letters followed by digits
+# (e.g. LU001). The check is deliberately lenient - a code that does not
+# match only produces a warning, so an unusual but valid code is never
+# refused. The classic mistake it catches is a leftover numeric RSS-era
+# code such as "202".
+REGION_CODE_SHAPE = re.compile(r'^[A-Z]{2}[A-Z0-9]+$')
+
+# Country slug of a '...legacy-atom-<slug>' feed URL -> EMMA_ID prefix.
+# Best effort: a slug missing from this table simply skips the
+# country/code mismatch warning.
+FEED_SLUG_TO_PREFIX = {
+    'austria': 'AT', 'belgium': 'BE', 'bulgaria': 'BG', 'croatia': 'HR',
+    'cyprus': 'CY', 'czechia': 'CZ', 'denmark': 'DK', 'estonia': 'EE',
+    'finland': 'FI', 'france': 'FR', 'germany': 'DE', 'greece': 'GR',
+    'hungary': 'HU', 'iceland': 'IS', 'ireland': 'IE', 'italy': 'IT',
+    'latvia': 'LV', 'lithuania': 'LT', 'luxembourg': 'LU', 'malta': 'MT',
+    'netherlands': 'NL', 'norway': 'NO', 'poland': 'PL', 'portugal': 'PT',
+    'romania': 'RO', 'slovakia': 'SK', 'slovenia': 'SI', 'spain': 'ES',
+    'sweden': 'SE', 'switzerland': 'CH',
+}
+
+
+def parseRegionCodes(raw):
+    """split the Mode2 setting into a clean list of region codes:
+    separated by commas, semicolons or whitespace, upper-cased, with
+    duplicates removed (first occurrence wins, so the primary region keeps
+    Units 1/2).
+
+    Arguments:
+        raw {str} -- e.g. "LU002, lu001;LU002"
+
+    Returns:
+        list[str] -- e.g. ['LU002', 'LU001']
+    """
+    codes = []
+    for token in re.split(r'[,;\s]+', str(raw or '').upper()):
+        if token and token not in codes:
+            codes.append(token)
+    return codes
+
+
+def feedCountryPrefix(url):
+    """EMMA_ID country prefix for a '...legacy-atom-<country>' URL, or None
+    when the URL has another shape or the country is not in the table."""
+    m = re.search(r'atom-([a-z0-9-]+?)/?$', str(url or '').strip().lower().split('?')[0])
+    return FEED_SLUG_TO_PREFIX.get(m.group(1)) if m else None
+
+
+def validateConfig(url, rawCodes):
+    """check the hardware settings once, at start-up.
+
+    A configuration *error* means polling cannot possibly work (empty or
+    non-http(s) URL, no region code) - the plugin then reports it once and
+    does not poll at all, instead of retrying a request that can never
+    succeed. A *warning* is only a hint (URL or region code looks unusual);
+    the setting is still used as configured.
+
+    Returns:
+        (errors, warnings, codes) -- two lists of messages and the parsed
+        region code list
+    """
+    errors = []
+    warnings = []
+    url = str(url or '').strip()
+    codes = parseRegionCodes(rawCodes)
+
+    if not url:
+        errors.append("RSSFeed (Mode1) is empty - enter your country's Atom feed URL")
+    elif not re.match(r'^https?://', url, re.IGNORECASE):
+        errors.append("RSSFeed (Mode1) '{}' is not an http(s) URL".format(url))
+    else:
+        if EXPECTED_FEED_HOST not in url:
+            warnings.append("Configured RSSFeed URL '{}' does not look like a {} URL"
+                            .format(url, EXPECTED_FEED_HOST))
+        elif EXPECTED_FEED_PATH_HINT not in url.lower():
+            warnings.append("Configured RSSFeed URL '{}' does not look like an Atom feed - legacy RSS "
+                            "feeds were sunset; use a '...legacy-atom-<country>' URL".format(url))
+
+    if not codes:
+        errors.append("RSSCode(s) (Mode2) is empty - enter at least one region code such as LU001")
+
+    prefix = feedCountryPrefix(url)
+    for code in codes:
+        if not REGION_CODE_SHAPE.match(code):
+            warnings.append("Region code '{}' does not look like a MeteoAlarm EMMA_ID (two letters followed "
+                            "by digits, e.g. LU001) - it will probably never match a warning".format(code))
+        elif prefix and not code.startswith(prefix):
+            warnings.append("Region code '{}' does not start with '{}', the country prefix of this feed - "
+                            "it will probably never match a warning".format(code, prefix))
+    return errors, warnings, codes
 
 
 def parseCapIsoDate(value):
@@ -85,6 +181,19 @@ def fetchFeed(url, timeoutSeconds, userAgent="Domoticz-MeteoAlarmEU-Atom/{}".for
     if getattr(feed, 'bozo', 0):
         Domoticz.Debug("Feed parsed with warnings (bozo): {}"
                        .format(getattr(feed, 'bozo_exception', 'unknown')))
+
+    # (added in 1.7.2) feedparser never raises on bad input. A captive-portal
+    # or error page served with HTTP 200 parses into a result with no
+    # entries, which would otherwise be read as "no warnings" (a false
+    # all-clear). feedparser reports the detected format in `version`
+    # ('atom10' for a real Atom feed - also one with zero active warnings,
+    # '' for HTML, JSON, plain text and other non-feeds). To make sure a
+    # real feed can never be refused, BOTH signals must be missing: no
+    # recognised format AND no feed-level title/id/updated element.
+    if (not feed.get('entries') and not feed.get('version')
+            and not any(key in feed.get('feed', {}) for key in ('title', 'id', 'updated'))):
+        raise Exception("response is not a valid Atom feed ({} bytes received, first bytes: {!r})"
+                        .format(len(rawData), rawData[:60]))
     return feed, rawData
 
 
@@ -196,9 +305,27 @@ class Meteo:
             loc = self.location if self.location is not None else self.locationName
             s = getAwtTranslation(idx, self.langKey) + ': ' + loc
             if Meteo.SHOW_DATE_IN_NAME is True and self.pubDate is not None:
-                dt = datetime.fromtimestamp(mktime(self.pubDate))
+                # (fixed in 1.7.2: feedparser's *_parsed values are UTC, and
+                # time.mktime() reads them as local time, so the shown time
+                # was off by the UTC offset. calendar.timegm() is correct.)
+                dt = datetime.fromtimestamp(timegm(self.pubDate))
                 s = "{} ({:%H:%M})".format(s, dt)
         return s
+
+    @staticmethod
+    def _publishedStamp(entries):
+        '''"HH:MM" - or "D.M. HH:MM" when not published today - of the newest
+        publish time among the given entries, in local time. None if no
+        entry carries one. Shown at the end of the device text since 1.7.2,
+        replacing the publish time that used to be part of the device name.
+        '''
+        stamps = [e.get('published_parsed') for e in entries if e.get('published_parsed')]
+        if not stamps:
+            return None
+        published = datetime.fromtimestamp(timegm(max(stamps)))
+        if published.date() == datetime.now().date():
+            return "{:%H:%M}".format(published)
+        return "{:%d.%m. %H:%M}".format(published)
 
     def getTodayTitle(self):
         return self.getDayTitle(200)
@@ -305,8 +432,8 @@ class Meteo:
         '''pull the EMMA_ID region code out of an entry - primary source is
         the geocode link href (explicit/stable), falling back to
         feedparser's flattened cap:geocode value.'''
-        for l in entry.get('links', []):
-            href = l.get('href', '') or ''
+        for link in entry.get('links', []):
+            href = link.get('href', '') or ''
             m = re.search(r'geocode=EMMA_ID:([A-Za-z0-9]+)', href)
             if m:
                 return m.group(1)
@@ -404,6 +531,11 @@ class Meteo:
         text = "; ".join(parts)
         if len(text) > Meteo.MAX_SHOWN_DETAIL_LENGTH:
             text = text[:Meteo.MAX_SHOWN_DETAIL_LENGTH].rstrip() + "..."
+        # (1.7.2) publish time of the newest message for this day, appended
+        # after truncation so it is never cut off
+        stamp = Meteo._publishedStamp(entries)
+        if stamp:
+            text = "{} [{}]".format(text, stamp)
         return text, highestLevel, worstAwtKey
 
     def processFetchedFeed(self, feed):
@@ -442,7 +574,7 @@ class Meteo:
                                "entries for code {}".format(skippedNonActual, self.rssCode))
 
             if not matchedEntries:
-                Domoticz.Log("no entry found --> no alert")
+                Domoticz.Debug("no entry found for {} --> no alert".format(self.rssCode))
                 d = getAwtTranslation(99, self.langKey)
                 self.pubDate = firstPubDate
                 self.todayDetail = d

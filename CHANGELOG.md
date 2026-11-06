@@ -3,6 +3,110 @@
 All notable changes to this project are documented here. Format loosely
 follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.7.2]
+
+Theme: **quiet and safe** - a plugin problem must never look like a weather
+alert, a restart must not disturb what the devices show, and a setting that
+can never work must not be retried forever. Planned in `ROADMAP.md`.
+Upgrading from 1.7.0/1.7.1: see `DEPLOY.md` -> *Upgrading*.
+
+### Changed (behaviour - read before upgrading)
+- **A feed problem no longer shows up as a red weather alert.** A failed
+  fetch used to set Today/Tomorrow to level 4 (red) with the error text, so
+  anything triggered by "level 4" fired on a network blip. Now they keep
+  their last values, and once no fetch has succeeded for **3 poll
+  intervals** they turn grey (level 0, "No data - feed unreachable since
+  HH:MM") until the feed is back. If you relied on the red error state, use
+  **Plugin Status** instead.
+- **Plugin Status colours**: green = OK, orange = retrying (data still
+  fresh), red = failing (data stale) or configuration error, grey =
+  starting. Before, OK was level 0 (grey) and ERROR level 1 (green), and
+  "OK" was written at start-up before any fetch.
+- **Device names are set once and never rewritten on update.** They used to
+  be pushed with every update, which overwrote names you had chosen in the
+  GUI and broke dzVents/Blockly scripts that reference devices by name. A
+  one-time migration at start renames only names the plugin itself
+  generated (`Today`, `Today (LU002)`, the 1.7.0 forms `Today: <place>
+  (14:05)` / `Heute: ERROR!!!` in any supported language); a name you
+  chose is left alone. A name that you give the form `Today (...)` counts as
+  plugin-generated and is reset at the next start.
+- **The publish time moved from the device name into the device text**:
+  `Wind (4) Area 11:00-18:00 [12:00]`, or `[02.11. 12:00]` when the message
+  was not published today. It is the newest message for that day.
+- **Default polling interval is 30 minutes** (was 300). This applies to
+  newly added hardware and as the fallback for an invalid value; an
+  existing hardware keeps the value stored in its settings - change it in
+  **Setup -> Hardware** if you want 30.
+- **Dropdown defaults** are all marked with `selected="selected"` (the
+  maintainer's decision). **Debug now defaults to False** - "True" used to
+  be the first option and `default="False"` is not an attribute this plugin
+  could confirm Domoticz honours. The detail language defaults to
+  Luxembourgish, as in the 1.7.1 repo. Defaults only matter for newly added
+  hardware.
+- `Domoticz.Log` noise: the per-device `BLZ: Awareness Updated/Unchanged`
+  lines and `no entry found --> no alert` moved to debug level.
+
+### Fixed
+- **Retry storm.** After an error the plugin retried on every 10-second
+  heartbeat, ten times, before it first waited (visible in a real log as
+  `Error #0 ... #19`). Backoff is now time-based from the first failure:
+  1, 2, 5, 10, 30, then 60 minutes, never longer than the poll interval.
+  Failures are logged on the first one, when the message changes and while
+  the wait escalates; repeats at the longest wait go to debug. A recovery
+  is logged once. (`Error #0` also counted from zero.)
+- **Settings that can never work are no longer retried.** An empty or
+  non-http(s) feed URL, or no region code, is now reported once at start-up,
+  Plugin Status turns red with `CONFIG ERROR: ...`, and polling is skipped
+  (an empty URL used to produce `unknown url type: ''` every 10 seconds).
+  Region codes are cleaned up (comma/semicolon/space separated, upper-cased,
+  duplicates removed). A code that does not look like an EMMA_ID (for
+  example the old numeric RSS code `202`) or whose country prefix does not
+  fit the feed only produces a warning.
+- **A non-feed page returned with HTTP 200** (captive portal, error page)
+  parsed to zero entries and showed as "no warnings". It is now rejected as
+  a fetch error. A real feed with no active warnings is still accepted.
+- **Today/Tomorrow are re-split at midnight** from the cached feed, without
+  a new request. They were only recomputed after a successful fetch, so
+  with a long poll interval "Tomorrow" stayed "Tomorrow" for hours.
+- **A restart no longer wipes the devices.** Start-up used to overwrite
+  Today/Tomorrow with "No Data", Plugin Status with "OK" and Last Successful
+  Update with "never". Only newly created devices get a placeholder, and
+  Plugin Status shows "Starting" until the first fetch.
+- A region that cannot be processed keeps its previous values and is
+  reported on Plugin Status, instead of turning red.
+- Publish time in feed-title device names was off by the UTC offset
+  (`time.mktime()` on a UTC value); now correct, and shown in the text.
+- `meteoalarm_icons.zip` re-packed: the repo copy had a `meteoalarm_icons/`
+  folder and 242 macOS `__MACOSX`/`._*` entries, with `icons.txt` not at the
+  zip root, which is where Domoticz expects it. The images are unchanged.
+  Whether Domoticz refused the old layout is unverified (a successful
+  `Create()` is logged either way), but the flat layout is the documented
+  one.
+- Tests failed whenever they ran within a few hours of midnight (a warning
+  "ending in 1 hour" legitimately reached tomorrow). They now use a frozen
+  clock.
+
+### Added
+- `testManifest.py`: lints the plugin manifest the way Domoticz reads it
+  (line scan from `<plugin` to `</plugin>`, parsed as XML) and the icon zip.
+  This is the check that would have caught the 1.7.1 `&` bug.
+- `testPlugin.py`: end-to-end tests that drive `onStart`/`onHeartbeat` with
+  a frozen clock and a scripted feed (status colours, outages and recovery,
+  backoff timing, config errors, restart, name migration, midnight, icons).
+- `.github/workflows/tests.yml`: runs everything on Python 3.11-3.13.
+- `fakeDomoticz.py` now records log lines and device updates and is quiet by
+  default (`FAKEDOMOTICZ_VERBOSE=1` prints them).
+- `.editorconfig` and a minimal `pyproject.toml` (formatter settings).
+
+### Docs
+- README synced with the real settings and device names; `DEPLOY.md` gained
+  upgrade notes (plugin key rename, removed `Address` field, poll interval).
+- `ROADMAP.md`. The 1.7.1 entry below carries a correction.
+
+### Removed
+- `.gitignore` entries `*.1.7.0.md` and `*1.7.0.*` (leftovers of the 1.7.0
+  rollback).
+
 ## [1.7.1]
 
 ### Fixed
@@ -18,16 +122,28 @@ follows [Keep a Changelog](https://keepachangelog.com/).
   values ever captured. Fixed by escaping it as `&amp;t=19519`, per the XML
   spec. Verified by reproducing Domoticz's exact extraction+parse algorithm
   against the real file - confirmed broken before, confirmed clean after.
-- Two related defects found via the same verification, same root cause
-  category (embedded literal newlines inside XML attribute values, which
-  XML normalizes to a space/leading-space rather than erroring, silently
-  corrupting the value): the `Mode1` (`RSSFeed`) default URL had a newline
-  splitting `...atom-lux` from `embourg`, and `externallink` had a leading
-  newline before `http://`. Both merged onto single lines.
+- **Correction (added in 1.7.2):** this entry originally listed two more
+  defects, "embedded literal newlines" in the `Mode1` default URL and in
+  `externallink`. That was wrong. The line breaks were terminal wrapping in
+  the `more` output that had been pasted for diagnosis: in each paste the
+  broken line was exactly as wide as the terminal (145 and 188 characters),
+  and a real newline would not break at the terminal width. The bare `&`
+  above is the only root cause; nothing needed merging.
 - `getDayIconKey()` never checked `self.iconNo` — selecting **NO_ICON** in
   Mode6 had no effect as long as the icon zip loaded successfully; only
   the plugin-level "did the zip load" flag gated icons, never the user's
   actual setting.
+
+### Changed (documented retroactively in 1.7.2 - these were in the 1.7.1 code but not in this file)
+- **The `Address` hardware field was removed.** All region codes now go in
+  **RSSCode(s)** (`Mode2`) as a comma-separated list, default
+  `LU002, LU001`; the first code keeps Units 1/2, further codes get Units
+  5/6, 7/8, ... Extra regions that were entered in `Address` under 1.7.0
+  are no longer read - re-enter them in `Mode2`.
+- **Region code in every Today/Tomorrow device name**, including the first
+  region (`Today (LU002)`, `Tomorrow (LU002)`); existing devices were
+  renamed at start-up, and feed-generated titles no longer overwrote the
+  names. (1.7.2 reworked this: names are set once, see below.)
 
 ### Added
 - Luxembourgish as a 7th detail-language option ("Detailer op
@@ -53,6 +169,13 @@ follows [Keep a Changelog](https://keepachangelog.com/).
   `DEPLOY.md`/`SECURITY.md` split.
 
 ## [1.7.0]
+
+### Changed (documented retroactively in 1.7.2)
+- **The plugin `key` changed from `MeteoAlarmEU Atom` to `MeteoAlarmEU-Atom`**
+  (visible in git: 1.6.x tags use the old key, `v1.7.0` the new one). Domoticz
+  stores the key with each hardware, so a hardware added under 1.6.x is
+  tied to the old key. See `DEPLOY.md` -> *Upgrading from 1.6.x* for how to
+  check and fix it.
 
 ### Added
 - **Multi-region support**: the previously-unused `Address` hardware

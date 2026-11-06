@@ -4,19 +4,46 @@ exercise plugin.py's onStart()/onHeartbeat() logic (device creation,
 multi-region unit allocation, icon wiring) without a real Domoticz
 instance. This intentionally does NOT try to fake network calls - tests
 using this should monkeypatch meteo.fetchFeed instead.
+
+Since 1.7.2 it is quiet by default and records what the plugin did, so
+tests can assert on it:
+
+    fakeDomoticz.messages          list of (level, text) in call order
+    fakeDomoticz.errors()          just the Error texts
+    fakeDomoticz.Devices[u].history  list of (nValue, sValue, Name) per Update()
+    fakeDomoticz.reset()           clear Devices, Images and messages
+
+Set the environment variable FAKEDOMOTICZ_VERBOSE=1 to also print every
+message and device update.
 """
+import os
+import zipfile
+
+VERBOSE = os.environ.get("FAKEDOMOTICZ_VERBOSE", "") not in ("", "0")
+
+messages = []
+
+
+def _record(level, msg):
+    messages.append((level, str(msg)))
+    if VERBOSE:
+        print("[{}]".format(level), msg)
 
 
 def Debug(msg):
-    print("[DEBUG]", msg)
+    _record("DEBUG", msg)
 
 
 def Log(msg):
-    print("[LOG]", msg)
+    _record("LOG", msg)
 
 
 def Error(msg):
-    print("[ERROR]", msg)
+    _record("ERROR", msg)
+
+
+def errors():
+    return [text for level, text in messages if level == "ERROR"]
 
 
 def Debugging(level):
@@ -29,7 +56,8 @@ class FakeImageHandle:
         self.ID = image_id
 
     def Create(self):
-        import zipfile
+        # Like Domoticz, expect icons.txt at the ROOT of the zip - a zip
+        # packed with a subfolder (or macOS extras around it) fails here.
         with zipfile.ZipFile(self._filename) as zf:
             with zf.open('icons.txt') as f:
                 lines = f.read().decode('utf-8').strip().splitlines()
@@ -58,6 +86,8 @@ class FakeDevice:
         self.sValue = ""
         self.ID = Unit
         self.LastLevel = 0
+        self.LastImage = None
+        self.history = []
         self._created = False
 
     def Create(self):
@@ -68,12 +98,14 @@ class FakeDevice:
     def Update(self, nValue, sValue, Name=None, Image=None):
         self.nValue = nValue
         self.sValue = sValue
+        self.history.append((nValue, sValue, Name))
         if Name is not None:
             self.Name = Name
         if Image is not None:
             self.LastImage = Image
-        print("    -> Unit {}: nValue={} sValue={!r} Name={!r} Image={}"
-              .format(self.Unit, nValue, sValue, self.Name, Image))
+        if VERBOSE:
+            print("    -> Unit {}: nValue={} sValue={!r} Name={!r} Image={}"
+                  .format(self.Unit, nValue, sValue, self.Name, Image))
 
 
 def Device(Name, Unit, TypeName, Used=1):
@@ -83,3 +115,10 @@ def Device(Name, Unit, TypeName, Used=1):
 Devices = {}
 Images = {}
 
+
+def reset():
+    """clear all recorded state between tests (keeps the same dict objects,
+    which plugin.py holds references to)."""
+    Devices.clear()
+    Images.clear()
+    del messages[:]

@@ -1,0 +1,19 @@
+# Formatter / linter settings only - this is a Domoticz plugin, not a
+# pip-installable package. Pick ONE formatter and run it over the whole
+# tree in a commit of its own, so later diffs stay readable:
+#
+#   pip install ruff
+#   ruff format .
+#   ruff check .
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W"]
+# E501 is left to the formatter: the plugin manifest (XML attributes) and the
+# translation tables in meteo.py have long lines that cannot be wrapped.
+ignore = ["E501"]
+# plugin.py uses names that Domoticz injects at run time (Parameters,
+# Settings, Devices, Images); ruff cannot know them.
+per-file-ignores = { "plugin.py" = ["F821"] }

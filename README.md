@@ -1,16 +1,21 @@
 # MeteoAlarmEU-Atom
 
-[![Plugin version](https://img.shields.io/badge/version-1.7.1-red.svg)]()
+[![Plugin version](https://img.shields.io/badge/version-1.7.2-red.svg)]()
+[![Tests](https://github.com/janreimen/Domoticz-MeteoAlarmEU-Atom/actions/workflows/tests.yml/badge.svg)](https://github.com/janreimen/Domoticz-MeteoAlarmEU-Atom/actions/workflows/tests.yml)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](LICENSE)
 
 Show official weather warnings from [meteoalarm.org](http://www.meteoalarm.org/)
 as devices in your [Domoticz](https://www.domoticz.com/) home automation
 install.
 
-![settings](https://github.com/belzetrigger/domoticz-MeteoAlarmEU/raw/master/resources/unit_en_ml_warnings.PNG)
+![devices](resources/unit_en_ml_warnings.PNG)
+
+*(Screenshot inherited from the upstream project; it shows the device
+layout, not this fork's exact texts.)*
 
 > **New here?** For installation steps, see [`DEPLOY.md`](DEPLOY.md).
 > For the version history, see [`CHANGELOG.md`](CHANGELOG.md).
+> For what is planned, see [`ROADMAP.md`](ROADMAP.md).
 > For security/reporting info, see [`SECURITY.md`](SECURITY.md).
 > This file covers what the plugin does, its settings, and how it works.
 
@@ -38,22 +43,41 @@ confirm your country participates.
 
 | Device | Purpose |
 | --- | --- |
-| **Today** / **Tomorrow** | Alert-level devices for your primary configured region |
-| **Plugin Status** | Reflects whether the last feed fetch succeeded — wire a Domoticz notification off this without parsing alert text |
+| **Today (\<code\>)** / **Tomorrow (\<code\>)** | One Alert-device pair per configured region, e.g. `Today (LU002)`. The first region keeps Units 1/2, further regions use 5/6, 7/8, … |
+| **Plugin Status** | The health of the plugin itself, not the weather — see *Plugin Status colours* below. Wire a Domoticz notification off this instead of parsing alert text |
 | **Last Successful Update** | Timestamp of the last clean fetch, so a silently stuck feed is visible in the UI, not just in logs |
-| **Today (\<code\>)** / **Tomorrow (\<code\>)** | One extra pair per additional region configured (1.7.0+) |
+
+Device **names** are set once, when a device is created. The plugin never
+renames a device on update, so dzVents/Blockly scripts that refer to a
+device by name keep working and a name you chose in the GUI is kept. (A
+one-time rename at start-up only touches names the plugin generated itself,
+such as the old `Today` or `Today: Luxembourg (14:05)`; a name of the form
+`Today (...)` counts as plugin-generated.)
+
+The device **text** shows what the warning is, and when it was published:
+`Wind (4) Area 11:00-18:00 [12:00]` — the last part is the publish time of
+the newest message for that day (`[02.11. 12:00]` if it was not published
+today).
+
+### Plugin Status colours
+
+| Colour | Meaning |
+| --- | --- |
+| Grey | `Starting` — right after a start, until the first fetch has finished |
+| Green | `OK` — the last fetch worked |
+| Orange | `Retrying (attempt n): …` — the last fetch failed; Today/Tomorrow still show the last good data |
+| Red | `FAILING since HH:MM: …` (no good fetch for three poll intervals; Today/Tomorrow have gone grey) or `CONFIG ERROR: …` (nothing is polled until the settings are fixed) |
 
 ## Settings
 
 | Field | What it does |
 | --- | --- |
 | **RSSFeed** | Your country's Atom feed URL from [feeds.meteoalarm.org](https://feeds.meteoalarm.org/) — must be a `...legacy-atom-<country>` URL. Legacy RSS URLs are sunset and no longer work. |
-| **RSSCode (primary region)** | Your region's `EMMA_ID` code (e.g. `LU001`). Get it from meteoalarm.org's "geocodes json" download, or from an old-style RSS filename like `FI001.rss` → `FI001`. |
-| **Additional Region Codes** *(1.7.0+)* | Optional, comma-separated (e.g. `LU002,LU003`). Must be regions within the **same** country/feed as RSSFeed — one fetch per heartbeat is shared across all of them. For a different country, add the hardware a second time instead. |
-| **Update** | Minutes between polls. Falls back to 300 if missing/invalid rather than failing to start. |
-| **Debug** | Verbose logging — includes a raw-feed preview on fetch/parse failure and feedparser's own malformed-feed warnings. |
-| **Details and Language** | `NO_DETAIL` (compact), `Details using domoticz lang` (auto-detects from Domoticz's own language setting), or an explicit language: English, German, Swedish, French, Spanish, Finnish, or **Luxembourgish** *(1.7.1+)*. |
-| **Show Alarm Icons** | *(1.7.0+)* Controls the plugin's own bundled severity+type icon set, since the feed itself no longer provides icons. `NO_ICON` uses Domoticz's default Alert icon. |
+| **RSSCode(s)** | One or more `EMMA_ID` region codes, separated by commas (e.g. `LU002, LU001`). Get them from meteoalarm.org's "geocodes json" download, or from an old-style RSS filename like `FI001.rss` → `FI001`. The first code keeps Units 1/2. All codes must belong to the **same** country/feed as RSSFeed — one fetch per heartbeat is shared across all of them. For a different country, add the hardware a second time. A code that does not look like an `EMMA_ID` (two letters, then digits), or whose country prefix does not fit the feed, is only warned about in the log. |
+| **Update every x minutes** | Minutes between polls. Default **30** for newly added hardware (existing hardware keeps its stored value); 5–1440 is accepted, an empty or invalid value falls back to 30. |
+| **Debug** | Verbose logging — includes a raw-feed preview on fetch/parse failure and feedparser's own malformed-feed warnings. Default off. |
+| **Details and Language for Status** | `NO_DETAIL` (compact), `Details using domoticz lang` (auto-detects from Domoticz's own language setting), or an explicit language: English, German, Swedish, French, Spanish, Finnish, or Luxembourgish. Default: Luxembourgish. |
+| **Show Alarm Icons** | Controls the plugin's own bundled severity+type icon set, since the feed itself no longer provides icons. `NO_ICON` (default) uses Domoticz's default Alert icon. |
 
 ## How it works
 
@@ -74,11 +98,36 @@ format the feed used to serve is gone). For each configured region:
 - **Day-splitting** — `cap:onset`/`cap:expires` (real timestamps) decide
   whether a warning belongs to Today, Tomorrow, or both. A warning
   spanning multiple days appears in both, with the non-today end shown
-  as a date + day-offset (e.g. `+1d`).
+  as a date + day-offset (e.g. `+1d`). At midnight the plugin re-splits the
+  last fetched feed for the new day without a new request, so Today and
+  Tomorrow are right even with a long poll interval.
 - **Urgency** — `cap:urgency` of `Future`/`Past` shows as
   `[upcoming]`/`[ending]` in verbose mode.
 - **Change detection** — devices only update when the rendered
   today/tomorrow text or level actually changed, not on every poll.
+
+### When something goes wrong
+
+A plugin problem is never shown as a weather alert:
+
+- **A fetch fails** (timeout, HTTP error, no network, or an answer that is
+  not an Atom feed): Today/Tomorrow keep their last values and Plugin
+  Status turns orange. Retries back off 1, 2, 5, 10, 30 and 60 minutes —
+  never longer than the poll interval — and are logged once per change
+  instead of once per attempt.
+- **No good fetch for three poll intervals**: Today/Tomorrow turn grey
+  (`No data - feed unreachable since HH:MM`) and Plugin Status turns red, so
+  an old all-clear never stays up for days. They restore themselves on the
+  next good fetch. (A grey device may still show its last warning icon.)
+- **A setting that cannot work** (empty or non-http(s) feed URL, no region
+  code): reported once at start-up, Plugin Status turns red with
+  `CONFIG ERROR: …`, nothing is polled.
+- **A region code that matches no warning** looks exactly like "no warning
+  today", because the feed only lists active warnings. The plugin cannot
+  tell the two apart; it only warns when a code looks wrong (see
+  *Settings*).
+- **A restart** keeps what the devices show; only newly created devices get
+  a "No Data" placeholder.
 
 The feed fetch has a 15-second timeout so a hung connection can't block
 Domoticz's whole heartbeat cycle, and multiple regions share a single
@@ -86,13 +135,17 @@ fetch per heartbeat rather than each fetching independently.
 
 ## Bugs and ToDos
 
-1. **Icon zip is unverified against a live Domoticz instance.**
+The full, prioritised list is in [`ROADMAP.md`](ROADMAP.md). The ones to
+know about:
+
+1. **Icons are unverified against a live Domoticz instance.**
    `meteoalarm_icons.zip` was built against Domoticz's documented
-   custom-icon conventions and a simulated test harness, but real-world
-   behavior for plugin-bundled icons on Alert-type devices specifically
-   has conflicting documentation even within the Domoticz community. If
-   icons don't appear, the plugin still works normally (default Alert
-   icon) — see `DEPLOY.md` → *Verifying It's Running Correctly*.
+   custom-icon conventions (flat zip, `icons.txt` at its top level) and a
+   simulated test harness, but real-world behavior for plugin-bundled
+   icons on Alert-type devices specifically has conflicting documentation
+   even within the Domoticz community. If icons don't appear, the plugin
+   still works normally (default Alert icon) — see `DEPLOY.md` →
+   *Troubleshooting*.
 2. Event-type detection is keyword-matching against the entry title and
    `cap:event`. Only Thunderstorm, Rain, Coastal Event, and Forest-fire
    are confirmed against real feed data; Wind, Snow/Ice, Fog, High/Low
@@ -120,13 +173,29 @@ Structure follows the pattern from
 
 - `fakeDomoticz.py` — simulates enough of the Domoticz plugin framework
   (Devices, Images, Log/Debug/Error) to run `plugin.py`'s
-  `onStart()`/`onHeartbeat()` outside Domoticz.
-- `testMeteo.py` — a real `unittest` suite (`python3 testMeteo.py`)
-  covering CAP-status filtering, the needUpdate fingerprint, multi-day
-  span splitting, urgency tagging, all language-mapping fixes, icon key
-  lookup, and exact-match region code extraction. Test data uses dates
-  relative to when the tests run, not hardcoded dates, so it doesn't go
-  stale.
+  `onStart()`/`onHeartbeat()` outside Domoticz. It records every log line
+  and device update so tests can assert on them (quiet by default;
+  `FAKEDOMOTICZ_VERBOSE=1` prints them).
+- `testMeteo.py` — unit tests for `meteo.py`: CAP-status filtering, the
+  needUpdate fingerprint, multi-day span splitting, urgency tagging,
+  language mappings, icon key lookup, exact-match region codes, config
+  validation, the publish-time text, and the "not a feed" guard. They run on
+  a **frozen clock** (today, 12:00), so they give the same result at any
+  time of day.
+- `testManifest.py` — lints what Domoticz reads without running any plugin
+  code: the XML manifest at the top of `plugin.py` (read the way Domoticz
+  reads it) and the icon zip layout.
+- `testPlugin.py` — end-to-end tests that drive `onStart()`/`onHeartbeat()`
+  with a frozen, hand-advanced clock and a scripted feed: status colours,
+  outages and recovery, backoff timing, config errors, restarts, name
+  migration, midnight rollover, icons.
+
+Run everything (the same command CI runs on Python 3.11–3.13):
+
+```bash
+pip install -r requirements.txt
+python3 -m unittest discover -p 'test*.py' -v
+```
 
 ## License
 
