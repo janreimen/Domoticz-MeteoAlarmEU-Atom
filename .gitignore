@@ -3,10 +3,10 @@ __pycache__/
 *.py[cod]
 *$py.class
 
-*.patch
-
 # C extensions
 *.so
+
+*.patch
 
 # Distribution / packaging
 .Python

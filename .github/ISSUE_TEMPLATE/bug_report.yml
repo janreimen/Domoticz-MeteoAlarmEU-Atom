@@ -1,0 +1,107 @@
+name: Bug report
+description: The plugin crashes, shows an error, or behaves differently from the documentation.
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting this. A partial report is still useful, so fill in what you can.
+
+        - If a **warning is wrong or missing**, please use the "Warning is wrong or missing" form instead.
+        - If you found a **security problem**, do not post it here. Use the private route in the [security policy](https://github.com/janreimen/Domoticz-MeteoAlarmEU-Atom/blob/master/SECURITY.md).
+        - Check the [troubleshooting table](https://github.com/janreimen/Domoticz-MeteoAlarmEU-Atom/blob/master/DEPLOY.md#troubleshooting) first; many symptoms are listed there.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What did you do, and what did you see? Say which device or screen you looked at.
+      placeholder: "After restarting Domoticz, Plugin Status stays orange and says Retrying (attempt 4)."
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected instead
+    validations:
+      required: true
+
+  - type: input
+    id: plugin-version
+    attributes:
+      label: Plugin version
+      description: The `version=` value at the top of `plugin.py`, or the release tag you installed.
+      placeholder: "1.7.3"
+    validations:
+      required: true
+
+  - type: input
+    id: domoticz-version
+    attributes:
+      label: Domoticz version
+      description: Shown under Setup -> About.
+      placeholder: "2026.1"
+    validations:
+      required: true
+
+  - type: input
+    id: python-versions
+    attributes:
+      label: Python and feedparser versions
+      description: "Output of `python3 --version` and `python3 -c \"import feedparser; print(feedparser.__version__)\"`, run as the user Domoticz runs as."
+      placeholder: "Python 3.13.5, feedparser 6.0.11"
+    validations:
+      required: false
+
+  - type: dropdown
+    id: plugin-status
+    attributes:
+      label: What does the Plugin Status device show?
+      description: Both the colour and the text matter. Pick the closest one and add the exact text below if it differs.
+      options:
+        - "Grey: Starting (and it never changes)"
+        - "Green: OK"
+        - "Orange: Retrying (attempt n)"
+        - "Red: FAILING since HH:MM"
+        - "Red: CONFIG ERROR"
+        - "The device does not exist"
+        - "The plugin does not start at all"
+        - "I did not look"
+    validations:
+      required: true
+
+  - type: textarea
+    id: settings
+    attributes:
+      label: Hardware settings
+      description: The feed URL, the region code(s), the update interval, the language and the icon setting. Nothing here is secret.
+      placeholder: |
+        RSSFeed: https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-atom-luxembourg
+        RSSCode(s): LU002, LU001
+        Update every: 30
+        Language: Luxembourgish
+    validations:
+      required: false
+
+  - type: textarea
+    id: log
+    attributes:
+      label: Domoticz log
+      description: |
+        Set **Debug** to `True` in the hardware settings, restart, and paste the log from `'onStart' called` up to the problem. Remove anything private first, such as host names.
+        This text is shown as plain text, so you do not need backticks.
+      render: text
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before sending
+      options:
+        - label: I looked for an existing issue about this.
+          required: true
+        - label: I removed anything private from the log.
+          required: false

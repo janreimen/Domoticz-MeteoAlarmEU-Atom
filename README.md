@@ -1,22 +1,23 @@
 # MeteoAlarmEU-Atom
 
-[![Plugin version](https://img.shields.io/badge/version-1.7.2-red.svg)]()
-[![Tests](https://github.com/janreimen/Domoticz-MeteoAlarmEU-Atom/actions/workflows/tests.yml/badge.svg)](https://github.com/janreimen/Domoticz-MeteoAlarmEU-Atom/actions/workflows/tests.yml)
-[![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](LICENSE)
+[![Plugin version 1.7.3](https://img.shields.io/badge/version-1.7.3-red.svg)](CHANGELOG.md)
+[![Tests: status of the latest test run](https://github.com/janreimen/Domoticz-MeteoAlarmEU-Atom/actions/workflows/tests.yml/badge.svg)](https://github.com/janreimen/Domoticz-MeteoAlarmEU-Atom/actions/workflows/tests.yml)
+[![License: GPL-3.0, see the LICENSE file](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](LICENSE)
 
 Show official weather warnings from [meteoalarm.org](http://www.meteoalarm.org/)
 as devices in your [Domoticz](https://www.domoticz.com/) home automation
 install.
 
-![devices](resources/unit_en_ml_warnings.PNG)
+![Two Domoticz device cards, Today and Tomorrow, each with a yellow warning triangle and a text that starts with the warning type and its level, here Low Temp(2), followed by the time range and a description](resources/unit_en_ml_warnings.PNG)
 
-*(Screenshot inherited from the upstream project; it shows the device
-layout, not this fork's exact texts.)*
+*(Screenshot inherited from the upstream project: it shows the device
+layout, not this fork's exact texts. In particular the publish time is no
+longer part of the device name, see below.)*
 
 > **New here?** For installation steps, see [`DEPLOY.md`](DEPLOY.md).
 > For the version history, see [`CHANGELOG.md`](CHANGELOG.md).
 > For what is planned, see [`ROADMAP.md`](ROADMAP.md).
-> For security/reporting info, see [`SECURITY.md`](SECURITY.md).
+> To report a problem or help out, see [Community](#community) below.
 > This file covers what the plugin does, its settings, and how it works.
 
 ---
@@ -58,6 +59,26 @@ The device **text** shows what the warning is, and when it was published:
 `Wind (4) Area 11:00-18:00 [12:00]` — the last part is the publish time of
 the newest message for that day (`[02.11. 12:00]` if it was not published
 today).
+
+### Warning levels
+
+The level is a number from 0 to 4. It is the number in brackets in the device
+text (`Wind (3)`), the value you test in a script, and the colour of the device.
+
+| Level | Colour | Meaning |
+| --- | --- | --- |
+| 0 | Grey | No data: a new device before its first fetch, or the feed has been unreachable for three poll intervals |
+| 1 | Green | No special awareness required |
+| 2 | Yellow | The weather is potentially dangerous |
+| 3 | Orange | The weather is dangerous |
+| 4 | Red | The weather is very dangerous |
+
+The level comes from the colour word in the title of the warning entry. If the
+title has none, it comes from the CAP severity: `Minor` is 2, `Moderate` is 3,
+`Severe` and `Extreme` are 4, and anything else is 2. A device shows the highest
+level of all warnings active for its day. The level is a plain number on
+purpose, so that scripts keep working; spelling it out in the text as well is
+on the roadmap.
 
 ### Plugin Status colours
 
@@ -185,17 +206,36 @@ Structure follows the pattern from
 - `testManifest.py` — lints what Domoticz reads without running any plugin
   code: the XML manifest at the top of `plugin.py` (read the way Domoticz
   reads it) and the icon zip layout.
+- `testCommunity.py` — checks the community files, the issue forms and the
+  Markdown documents: required files exist, forms are valid, relative links and
+  anchors resolve, headings stay in order, images have alternative text, and
+  version numbers agree.
 - `testPlugin.py` — end-to-end tests that drive `onStart()`/`onHeartbeat()`
   with a frozen, hand-advanced clock and a scripted feed: status colours,
   outages and recovery, backoff timing, config errors, restarts, name
   migration, midnight rollover, icons.
 
-Run everything (the same command CI runs on Python 3.11–3.13):
+Run everything (the same commands CI runs on Python 3.11–3.13):
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements.txt -r requirements-dev.txt
 python3 -m unittest discover -p 'test*.py' -v
+ruff check .
 ```
+
+## Community
+
+- **Found a bug, or a warning that is wrong or missing?** Use one of the
+  [issue forms](https://github.com/janreimen/Domoticz-MeteoAlarmEU-Atom/issues/new/choose).
+  [`DEPLOY.md`](DEPLOY.md#troubleshooting) lists the common causes first.
+- **Want to change something?** Read [`CONTRIBUTING.md`](CONTRIBUTING.md); the
+  pull request template has a short checklist.
+- **Everyone taking part** follows the [Code of Conduct](CODE_OF_CONDUCT.md).
+- **A security problem?** Do not post it publicly, see
+  [`SECURITY.md`](SECURITY.md).
+- **Something hard to read or use?** See the accessibility statement,
+  [`ACCESSIBILITY.md`](ACCESSIBILITY.md), for what has and has not been checked
+  and how to report a barrier.
 
 ## License
 

@@ -1,0 +1,64 @@
+name: Accessibility barrier
+description: Something in the documentation, the device texts or the way you can take part is hard to use.
+title: "[Accessibility] "
+labels: ["accessibility"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for telling us. A report like this is expertise, not a complaint.
+
+        You do not need to say anything about yourself, and a partial report is fine. If this form is itself hard to use, open a plain issue instead and write what you can; it will be handled the same way. The [accessibility statement](https://github.com/janreimen/Domoticz-MeteoAlarmEU-Atom/blob/master/ACCESSIBILITY.md) explains what this project covers.
+
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where is the barrier
+      options:
+        - "A document (README, deployment guide, changelog, roadmap, ...)"
+        - "The text a device shows (Today, Tomorrow)"
+        - "The Plugin Status or Last Successful Update device"
+        - "The settings form of the hardware"
+        - "The icons"
+        - "A log message"
+        - "The issue forms or the pull request process"
+        - "Something else"
+    validations:
+      required: true
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What were you trying to do, and what got in the way
+      placeholder: "I could not tell how serious a warning is: the text only says Wind (3)."
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What would have worked better
+      description: Optional. If you do not know, leave it empty.
+    validations:
+      required: false
+
+  - type: input
+    id: tools
+    attributes:
+      label: How you use Domoticz or GitHub
+      description: Optional. For example the Domoticz web page or an app, your screen reader or other assistive technology, your browser, with versions if you know them.
+    validations:
+      required: false
+
+  - type: dropdown
+    id: severity
+    attributes:
+      label: How much does it affect you
+      description: Optional. The maintainer confirms the level when going through reports.
+      options:
+        - "Critical: I cannot do a core task at all"
+        - "Serious: very difficult, but there is a workaround"
+        - "Moderate: annoying or inconsistent"
+        - "Minor: small effect"
+    validations:
+      required: false

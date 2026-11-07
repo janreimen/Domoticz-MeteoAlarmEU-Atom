@@ -1,0 +1,55 @@
+name: Feature request
+description: Suggest something the plugin could do.
+title: "[Feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please look at the [roadmap](https://github.com/janreimen/Domoticz-MeteoAlarmEU-Atom/blob/master/ROADMAP.md) first. The idea may already be there, with a note on why it is not done yet.
+
+  - type: textarea
+    id: goal
+    attributes:
+      label: What do you want to be able to do?
+      description: Describe the goal, not only the change. A concrete case helps most.
+      placeholder: "Close the blinds when a wind warning of level 3 or higher is active for tomorrow."
+    validations:
+      required: true
+
+  - type: textarea
+    id: today
+    attributes:
+      label: What do you do today instead?
+      description: Is there a workaround, for example with dzVents, Blockly or a script on the Today/Tomorrow devices?
+    validations:
+      required: false
+
+  - type: textarea
+    id: idea
+    attributes:
+      label: Your idea
+      description: How could it work? A rough sketch is fine.
+    validations:
+      required: false
+
+  - type: dropdown
+    id: help
+    attributes:
+      label: Could you help?
+      options:
+        - "I can send a pull request"
+        - "I can test a change on my Domoticz"
+        - "I can only describe the idea"
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Before sending
+      options:
+        - label: I checked the roadmap and the open issues.
+          required: true
+        - label: I understand that a change to what the devices show may be held back, because scripts depend on it.
+          required: false

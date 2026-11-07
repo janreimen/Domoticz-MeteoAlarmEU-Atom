@@ -43,10 +43,13 @@ unsanitized feed content in a way that could be abused, or a dependency
 issue specific to how this plugin uses it):
 
 1. **Do not open a public GitHub issue for it.**
-2. Open a private report via GitHub's "Report a vulnerability" flow
-   under this repository's **Security** tab (uses GitHub Security
-   Advisories), or contact the maintainer directly if that's not
-   available.
+2. Open a private report with the
+   [*Report a vulnerability* form](https://github.com/janreimen/Domoticz-MeteoAlarmEU-Atom/security/advisories/new)
+   (this repository's **Security** tab, GitHub Security Advisories). Only the
+   maintainer can read it. If that page does not open for you, contact the
+   maintainer privately through the contact options on the
+   [GitHub profile](https://github.com/janreimen), saying only that you have a
+   security report and not what it is.
 3. Include: the plugin version (from the `version=` attribute in
    `plugin.py`'s XML header), Domoticz version, and steps to reproduce.
 
@@ -54,6 +57,18 @@ Given the scope of this plugin (a weather-alert display integration, no
 credential handling, no inbound connections), response times are
 best-effort — this is a hobbyist project maintained outside working
 hours.
+
+### What happens next
+
+A confirmed problem is fixed in a new patch version of the latest release
+and described in `CHANGELOG.md`, without more detail than needed to
+protect users who have not updated yet. Please allow a reasonable time for
+a fix before you write about the problem publicly. You are welcome to be
+named in the changelog entry, or not, as you prefer.
+
+A problem that is not in this plugin, but in Domoticz, `feedparser` or the
+MeteoAlarm service, is not handled here; the maintainer will point you to the
+right project when it is clear.
 
 ## Known Limitations (not vulnerabilities, but worth knowing)
 

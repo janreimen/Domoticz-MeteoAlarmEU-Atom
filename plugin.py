@@ -3,7 +3,106 @@
 # Author:janreimen
 #
 """
-<plugin key="MeteoAlarmEU-Atom" name="Meteo Alarm EU RSS Reader Atom" author="belze,ycahome,janreimen" version="1.7.2" wikilink="" externallink="https://github.com/janreimen/Domoticz-MeteoAlarmEU-Atom">
+MeteoAlarmEU RSS Reader Plugin
+
+Author: Belze(2018/2019/2020/2022), Ycahome(2017), JanReimen(2026)
+
+
+
+Version:    1.0.0-1.5.0: original belze/ycahome plugin - initial version
+                  through bug fixes, BeautifulSoup-based RSS parsing,
+                  detail/language/icon options, and a class-based rewrite.
+
+            1.6.0: switched over from RSS to ATOM Feeds
+
+            1.6.1: fixed onStart/onHeartbeat crash when self.mt never got
+                  initialized (UnboundLocalError in getMeteoLang, missing
+                  pollinterval fallback); guarded onHeartbeat against
+                  self.mt being None; fixed inverted error-backoff check;
+                  fixed mktime(None) crash in getDayTitle when pubDate
+                  is missing.
+
+            1.6.2: added Health device (Unit 3) and Last Update device
+                  (Unit 4); switched fixed 10-min error backoff to
+                  exponential backoff (10/20/40/80, capped at 120 min);
+                  added startup sanity check on the configured feed URL.
+
+            1.6.3: meteo.py rewritten - the live feed no longer embeds an
+                  HTML table/icons/per-language text (verified by
+                  fetching it directly); parsing now reads the real CAP
+                  fields (cap:event, cap:severity, cap:onset, cap:expires)
+                  directly. Multi-day spans now split correctly across
+                  Today/Tomorrow using real timestamps. Fixed a
+                  pre-existing bug where German/Swedish detail-language
+                  selection silently fell back to English; added
+                  French/Spanish/Finnish translations. Dropped the bs4
+                  and python-dateutil dependencies (no longer needed).
+
+            1.7.0: fixed DOM_LANG_TO_METEO['se'] -> 'sv' (Domoticz's real
+                  Swedish code - 'se' never matched anything). Added
+                  cap:status filtering (Test/Exercise/Draft/System
+                  entries are now skipped - only Actual alerts show).
+                  needUpdate is now a real before/after content
+                  fingerprint instead of a pubDate-based proxy.
+                  cap:urgency is now shown for not-yet-active/ending
+                  warnings ([upcoming]/[ending]). Added multi-region
+                  support: the "Address" field (previously unused by
+                  this plugin) now accepts additional comma-separated
+                  region codes, each getting its own Today/Tomorrow
+                  device pair, sharing a single feed fetch per
+                  heartbeat rather than fetching once per region.
+                  Added a bundled severity+type icon set (meteoalarm's
+                  own 4-colour scale x 12 warning categories) loaded
+                  from meteoalarm_icons.zip, replacing the feed-sourced
+                  icons that no longer exist - NOTE: this specific piece
+                  is built against documented conventions but has not
+                  been verified against a live Domoticz instance; if
+                  icons don't appear, the plugin still works normally,
+                  it just falls back to the default Alert icon.
+
+            1.7.1: fixed getDayIconKey() ignoring self.iconNo (NO_ICON
+                  setting had no effect as long as the icon zip loaded).
+                  Added Luxembourgish as a 7th detail-language option.
+                  Removed dead code found during cleanup (unused
+                  imports, unused Meteo/BasePlugin attributes, unused
+                  helper functions). See CHANGELOG.md for full detail
+                  and the reasoning behind each change.
+
+                  Fixed multi-region device naming: the configured
+                  region code is now included in the stable Domoticz
+                  Today/Tomorrow device name for every configured region,
+                  including the primary region. Existing devices are
+                  automatically renamed on startup. Feed-generated day
+                  titles no longer overwrite the region-qualified
+                  device names.
+                  See CHANGELOG.md for full detail and the reasoning
+                  behind this change.
+
+            1.7.2: "quiet and safe". A feed problem is no longer shown as
+                  a red weather alert: Today/Tomorrow keep their last
+                  values and go grey only once the data is stale (3 poll
+                  intervals); Plugin Status carries the failure (green OK,
+                  orange retrying, red failing/config error, grey
+                  starting). Settings are validated once at start - a
+                  config error is reported once and polling is skipped.
+                  Time-based retry backoff replaces the 10-retries-per-
+                  cycle loop. HTTP-200 garbage pages are rejected instead
+                  of reading as "all clear". Today/Tomorrow are re-split
+                  at midnight without a new request. Restarts no longer
+                  wipe device values; device names are set once and never
+                  rewritten on update (names you chose yourself are kept);
+                  the publish time moved from the name into the device
+                  text. Default poll interval is now 30 minutes. See
+                  CHANGELOG.md for full detail.
+
+            1.7.3: community release, no change to what the plugin does.
+                  Code of Conduct, contributing guide, security policy,
+                  accessibility statement, issue forms and a pull request
+                  template; README gained a warning-levels table;
+                  testCommunity.py checks the documents and forms. See
+                  CHANGELOG.md.
+
+<plugin key="MeteoAlarmEU-Atom" name="Meteo Alarm EU RSS Reader Atom" author="belze,ycahome,janreimen" version="1.7.3" wikilink="" externallink="https://github.com/janreimen/Domoticz-MeteoAlarmEU-Atom">
     <description>
         <h2>Meteo Alarm EU RSS Reader eXtended</h2><br/>
         <h3>Features</h3>

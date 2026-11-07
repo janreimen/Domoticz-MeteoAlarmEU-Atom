@@ -89,6 +89,13 @@ For what the plugin does and how it works internally, see `README.md`.
    but expect device text formatting to look different after upgrading,
    since the whole parsing approach changed with it.
 
+### Upgrading from 1.7.2 to 1.7.3
+
+Nothing to do. 1.7.3 only adds documents and GitHub templates (code of
+conduct, contributing guide, accessibility statement, issue forms); the
+plugin behaves exactly as in 1.7.2. The plugin version shown in Domoticz
+changes to 1.7.3 after a restart.
+
 ### Upgrading from 1.7.0 / 1.7.1 to 1.7.2
 
 Read these before you restart - 1.7.2 changes what the devices show:

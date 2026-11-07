@@ -1,0 +1,72 @@
+name: Warning is wrong or missing
+description: The plugin runs, but Today/Tomorrow show a warning that is wrong, or none that you expected.
+title: "[Warning] "
+labels: ["bug", "parsing"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This form is for the case where the plugin is healthy (Plugin Status is green) but the **warning text, level or day is wrong**.
+
+        Two things to know before you send it:
+
+        1. The feed only lists **active** warnings. A region code that matches nothing looks exactly like "no warning today". Please compare your code with the `geocode=EMMA_ID:` values in the feed.
+        2. The one-line check in the [deployment guide](https://github.com/janreimen/Domoticz-MeteoAlarmEU-Atom/blob/master/DEPLOY.md#verifying-its-running-correctly) shows whether the feed is recognised and how many warnings it holds.
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What is wrong
+      options:
+        - "A warning is missing"
+        - "A warning shows on the wrong day"
+        - "The level (1 to 4) is wrong"
+        - "The warning type or its text is wrong"
+        - "The time range is wrong"
+        - "The language or a translation is wrong"
+        - "Something else"
+    validations:
+      required: true
+
+  - type: textarea
+    id: details
+    attributes:
+      label: What the device shows and what you expected
+      description: Copy the text of the Today or Tomorrow device, and say what the meteoalarm.org website shows for the same region.
+    validations:
+      required: true
+
+  - type: input
+    id: region
+    attributes:
+      label: Region code and country feed
+      placeholder: "LU002 on meteoalarm-legacy-atom-luxembourg"
+    validations:
+      required: true
+
+  - type: input
+    id: plugin-version
+    attributes:
+      label: Plugin version
+      placeholder: "1.7.3"
+    validations:
+      required: true
+
+  - type: textarea
+    id: entry
+    attributes:
+      label: The matching entry from the feed
+      description: |
+        If you can, paste the one `<entry>` that should have been shown. A short excerpt is enough. Warnings are public information, so there is nothing private in it.
+      render: xml
+    validations:
+      required: false
+
+  - type: textarea
+    id: log
+    attributes:
+      label: Domoticz log with Debug on
+      description: The lines around the problem. Remove anything private first.
+      render: text
+    validations:
+      required: false

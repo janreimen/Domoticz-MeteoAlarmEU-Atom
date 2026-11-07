@@ -5,6 +5,10 @@ on:
     branches: [master]
   pull_request:
 
+# the workflow only reads the repository
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -19,13 +23,19 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
+      # requirements-dev.txt: PyYAML (issue form checks) and ruff
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: pip install -r requirements.txt -r requirements-dev.txt
 
       - name: Compile check
         run: python -m py_compile plugin.py meteo.py fakeDomoticz.py
 
+      - name: Lint
+        run: ruff check .
+
       # testManifest.py (plugin manifest + icon zip), testMeteo.py (parser),
-      # testPlugin.py (onStart/onHeartbeat end to end)
+      # testPlugin.py (onStart/onHeartbeat end to end), testCommunity.py
+      # (community files, issue forms, Markdown). GitHub sets CI=true, which
+      # makes testCommunity.py fail instead of skip when PyYAML is missing.
       - name: Run tests
         run: python -m unittest discover -p 'test*.py' -v

@@ -4,9 +4,11 @@ Review of **Domoticz-MeteoAlarmEU-Atom 1.7.1** (written 2026-11-01), the
 scope of **1.7.2** that came out of it (built 2026-11-02 to 2026-11-06), and a
 backlog for 1.8.x and later.
 
-**Status:** 1.7.2 is built; every item marked *Done* below is in the code and
-covered by tests (see `CHANGELOG.md` for the user-facing description). Section
-5 records the decisions taken, section 6 what is still open.
+**Status:** 1.7.2 and 1.7.3 are built; every item marked *Done* below is in the
+code or the repository and covered by tests (see `CHANGELOG.md` for the
+user-facing description). 1.7.3 only adds community files and does not change
+what the plugin does (section 1a). Section 5 records the decisions taken,
+section 6 what is still open.
 
 ## How to read this
 
@@ -123,6 +125,33 @@ test; two escaped at first, which exposed weak tests that were then fixed.
 
 
 ---
+
+## 1a. Scope of 1.7.3: community files (built)
+
+Asked for on 2026-11-06: make the repository complete against GitHub's
+community profile, and keep it from rotting. Nothing in `plugin.py` or
+`meteo.py` changed except the version number.
+
+| GitHub item | Status | Where | Notes |
+| --- | --- | --- | --- |
+| Description | Needs your account | `gh repo edit`, section 6 | Text proposed there; it is a repository setting, not a file |
+| README | Done (updated) | `README.md` | Warning-levels table, Community section, alternative text for all images, the version badge had an empty link target |
+| Code of conduct | Done | `CODE_OF_CONDUCT.md` | Contributor Covenant 3.0 (CC BY-SA 4.0, attributed). Reports go through the GitHub profile; **decide** if you want a dedicated mailbox instead |
+| Contributing | Done | `CONTRIBUTING.md` | Includes the rules that come from earlier mistakes and the three places that hold the version |
+| License | Already there | `LICENSE` | Full GPL-3.0 text; a test checks that it stays the full text |
+| Security policy | Done (updated) | `SECURITY.md` | Direct link to the private report form; needs *private vulnerability reporting* switched on (section 6) |
+| Issue templates | Done | `.github/ISSUE_TEMPLATE/` | Forms: bug report, warning wrong or missing, feature request, accessibility barrier, plus `config.yml`. Blank issues stay on, so a form that is a barrier does not block anyone |
+| Pull request template | Done | `.github/PULL_REQUEST_TEMPLATE.md` | Mirrors `CONTRIBUTING.md`; absolute links, because a PR description resolves relative links against the PR page |
+| Accessibility | Done | `ACCESSIBILITY.md` | Written from what the code does. Lists known limitations and what has **not** been checked; claims no standard |
+
+Keeping it from rotting: `testCommunity.py` (links and anchors, heading order,
+alternative text, form structure, version agreement, template leftovers).
+GitHub turns a form with a YAML mistake into a blank issue without a message,
+so the form checks run in CI and fail, not skip, if PyYAML is missing. All 26
+deliberate breakages of the documents and forms were caught.
+
+Things this turned up (see section 3): the level is a bare digit in the device
+text (F14), and one German status text is slang (F15).
 
 ## 2. Findings in detail
 
@@ -407,6 +436,14 @@ description and topics (commands in section 6).
 | F12 | Run `ruff format .` once, in a commit of its own | Config is in `pyproject.toml`; keeps later diffs readable |
 | F13 | Check the guard and the parser against a saved real feed | Same fixtures as F2 |
 
+### Added to the backlog while building 1.7.3
+
+| ID | Item | Notes |
+| --- | --- | --- |
+| F14 | Spell the level out in the device text, as an opt-in setting (for example `Wind (3, orange)`) | Today the level is a digit, so a person who cannot see the colour has to know the scale (`ACCESSIBILITY.md`). Opt-in because scripts may parse `Wind (3)`; the default must not change text |
+| F15 | Plain wording for the German "no special awareness" text | It is informal slang (`AWT_TRANSLATION[99]`). Changing it changes device text for German users, so decide first |
+| F16 | Mark `parsing` and `accessibility` labels in the repository | The issue forms apply them; labels that do not exist are not applied (commands in section 6) |
+
 ## 4. Later / ideas
 
 - **L1.** Python Plugin Store metadata and a release channel, once the plugin key
@@ -414,7 +451,7 @@ description and topics (commands in section 6).
 - **L2.** Time zone handling: day boundaries use the Pi's local time
   (`datetime.now().astimezone()`), which is right for Luxembourg and wrong for
   a feed in another zone.
-- **L3.** Dependabot and `pip-audit` for `feedparser`.
+- **L3.** Dependabot (GitHub Actions versions, `requirements*.txt`) and `pip-audit` for `feedparser`.
 - **L4.** A `file://` fixture mode to verify icon rendering without the network.
 - **L5.** Hysteresis or "next change at" text so a warning ending in an hour is
   visible.
@@ -459,9 +496,28 @@ such as `NO_DETAIL` is preferred for other users of the plugin.
    packed flat? Look for `Custom severity/type icon set loaded` and, in Debug,
    `Icon probe ... registered in Images: True`.
 6. **GitHub housekeeping that needs your account:** a Release for `v1.7.2`
-   (and `v1.7.1` if none exists), description and topics, for example
-   `gh release create v1.7.2 --title "1.7.2 - quiet and safe" --notes "See CHANGELOG.md, section 1.7.2"`
+   and `v1.7.3` (and `v1.7.1` if none exists), description and topics, for
+   example
+   `gh release create v1.7.3 --title "1.7.3 - community files" --notes "See CHANGELOG.md, section 1.7.3"`
    and `gh repo edit --description "Domoticz plugin: MeteoAlarm.org weather warnings from the CAP-Atom feed" --add-topic domoticz --add-topic domoticz-plugin --add-topic meteoalarm`.
-7. **Plugin Store `git@github.com: Permission denied (publickey)`** appears four
+   For the 1.7.3 community files:
+   - Switch on private vulnerability reporting, which `SECURITY.md` and the
+     issue chooser link to:
+     `gh api -X PUT repos/janreimen/Domoticz-MeteoAlarmEU-Atom/private-vulnerability-reporting`
+   - Create the two labels the issue forms use:
+     `gh label create parsing --description "Warning text, level or day is wrong" --color D4C5F9`
+     and `gh label create accessibility --description "Barrier in the documents, texts or process" --color 0E8A16`
+   - Check the result: open *Insights -> Community Standards*, or run
+     `gh api repos/janreimen/Domoticz-MeteoAlarmEU-Atom/community/profile --jq '.health_percentage, .files'`.
+     I could not check it from here; GitHub may rate individual files differently
+     from what is written above.
+7. **Code of Conduct contact.** The file sends reports to the maintainer
+   through the GitHub profile and to GitHub through *Report content*. If you
+   would rather publish a mailbox, change that one paragraph under *Reporting
+   an Issue*; `testCommunity.py` only forbids leftovers of the template address.
+8. **Do the issue forms render on GitHub?** The forms are checked for structure
+   here, not rendered. Open *Issues -> New issue* once and look at the four
+   forms and the two links.
+9. **Plugin Store `git@github.com: Permission denied (publickey)`** appears four
    times in `[log]` lines 20-23. The messages do not name a plugin, so I cannot
    attribute them to this one; `DEPLOY.md` now tells to use the HTTPS URL.

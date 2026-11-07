@@ -3,6 +3,62 @@
 All notable changes to this project are documented here. Format loosely
 follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.7.3]
+
+Theme: **community files** - everything GitHub's community profile asks for,
+written for this plugin, and tests that keep it from rotting. The plugin
+itself behaves exactly as in 1.7.2: no change to devices, texts, defaults or
+settings. Planned in `ROADMAP.md`.
+
+### Added
+- `CODE_OF_CONDUCT.md`: Contributor Covenant 3.0 (CC BY-SA 4.0, attributed in
+  the file). Reporting goes to the maintainer privately through the GitHub
+  profile, or to GitHub through *Report content*; there is no placeholder
+  address.
+- `CONTRIBUTING.md`: bug and feature reporting, setup, project layout, the
+  rules that come from earlier mistakes (a plugin problem never looks like a
+  weather alert; no renaming devices on update; stable unit numbers; the
+  manifest is XML), the three places that hold the version, translations,
+  and the release steps.
+- `ACCESSIBILITY.md`: what the project controls (device texts, Plugin Status,
+  names, documents, forms), what it does, **known limitations** (the level is
+  a digit in the text, texts cut at 200 characters, Plugin Status is English
+  only, a grey device can keep its last icon, German "no warning" text is
+  slang, constructed Luxembourgish words) and what has **not** been checked
+  (no assistive-technology testing, no standard claimed).
+- Issue forms in `.github/ISSUE_TEMPLATE/`: *Bug report*, *Warning is wrong
+  or missing*, *Feature request*, *Accessibility barrier*, and `config.yml`
+  with links to the private security report and the troubleshooting table.
+  Blank issues stay enabled on purpose, so that a form that is itself a
+  barrier does not block anyone.
+- `.github/PULL_REQUEST_TEMPLATE.md`: a short checklist that mirrors the
+  rules in `CONTRIBUTING.md`.
+- `testCommunity.py`: required files exist and contain no template leftovers;
+  issue forms are structurally valid (GitHub turns a broken form into a blank
+  issue without a message); every relative link and `#anchor` in the
+  Markdown documents resolves; headings do not skip levels; images have
+  alternative text; link texts say where they lead; the README badge and the
+  security policy follow the current version; the layout table in
+  `CONTRIBUTING.md` matches the files.
+- `requirements-dev.txt` (PyYAML, ruff). CI installs it and now also runs
+  `ruff check .`; with `CI` set, a missing PyYAML fails the tests instead of
+  skipping the form checks.
+
+### Changed
+- `SECURITY.md`: direct link to the private *Report a vulnerability* form, a
+  fallback route, and what happens after a report.
+- `README.md`: new **Warning levels** table (0 grey, 1 green, 2 yellow,
+  3 orange, 4 red, with the CAP severity each comes from), a **Community**
+  section, a descriptive alternative text for the screenshot, a version
+  badge that links to the changelog (it had an empty link target), and
+  descriptive alternative text for the other badges.
+- The version is 1.7.3 in the manifest, `PLUGIN_VERSION` and here.
+
+### Not changed, on purpose
+- The device text still shows the level as a number (`Wind (3)`), because
+  scripts may parse it. Spelling it out is listed as a known limitation in
+  `ACCESSIBILITY.md` and as a candidate in `ROADMAP.md`.
+
 ## [1.7.2]
 
 Theme: **quiet and safe** - a plugin problem must never look like a weather

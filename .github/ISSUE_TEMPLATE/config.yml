@@ -1,0 +1,10 @@
+# Blank issues stay enabled on purpose: if a form is itself a barrier for
+# someone, they can still write a plain issue (see ACCESSIBILITY.md).
+blank_issues_enabled: true
+contact_links:
+  - name: Report a security problem (private)
+    url: https://github.com/janreimen/Domoticz-MeteoAlarmEU-Atom/security/advisories/new
+    about: Do not post vulnerabilities as a public issue. This opens a private report that only the maintainer can read.
+  - name: Troubleshooting table
+    url: https://github.com/janreimen/Domoticz-MeteoAlarmEU-Atom/blob/master/DEPLOY.md#troubleshooting
+    about: Many symptoms (red Plugin Status, missing warnings, icons not showing) are explained here.

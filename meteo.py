@@ -18,7 +18,7 @@ try:
 except ImportError:
     import fakeDomoticz as Domoticz
 
-PLUGIN_VERSION = "1.7.2"
+PLUGIN_VERSION = "1.7.3"
 
 # used only for early sanity-check warnings, never to reject a URL: a
 # non-matching URL is still used exactly as configured
